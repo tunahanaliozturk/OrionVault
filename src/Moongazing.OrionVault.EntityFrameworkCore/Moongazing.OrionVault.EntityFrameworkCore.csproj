@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFrameworks>net8.0;net9.0;net10.0</TargetFrameworks>
+    <IsPackable>true</IsPackable>
+    <PackageId>Moongazing.OrionVault.EntityFrameworkCore</PackageId>
+    <Description>EF Core integration for Moongazing.OrionVault: value converters, [Encrypted] attribute model scanner, IsEncrypted() fluent API, IModelCustomizer wiring, and DbContext DI extensions.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore" />
+    <ProjectReference Include="..\Moongazing.OrionVault\Moongazing.OrionVault.csproj" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,26 @@
+<Project>
+  <PropertyGroup>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <AnalysisLevel>latest</AnalysisLevel>
+    <AnalysisMode>AllEnabledByDefault</AnalysisMode>
+    <NoWarn>$(NoWarn);CA1014</NoWarn>
+    <Authors>Moongazing</Authors>
+    <Company>Moongazing</Company>
+    <Copyright>Copyright (c) 2026 Moongazing</Copyright>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/tunahanaliozturk/OrionVault</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/tunahanaliozturk/OrionVault</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageTags>encryption;security;ef-core;column-encryption;aes-gcm;orion</PackageTags>
+    <PackageIcon>icon.png</PackageIcon>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <Version>0.1.0</Version>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(IsPackable)' == 'true'">
+    <None Include="$(MSBuildThisFileDirectory)docs/icon.png" Pack="true" PackagePath="\" />
+  </ItemGroup>
+</Project>

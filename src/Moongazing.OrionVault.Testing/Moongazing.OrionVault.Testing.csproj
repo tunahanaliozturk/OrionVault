@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFrameworks>net8.0;net9.0;net10.0</TargetFrameworks>
+    <IsPackable>true</IsPackable>
+    <PackageId>Moongazing.OrionVault.Testing</PackageId>
+    <Description>Test helpers for Moongazing.OrionVault: deterministic TestKeyProvider, PlaintextEncryptor for inspection tests, and EncryptionAssertions.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Moongazing.OrionVault\Moongazing.OrionVault.csproj" />
+  </ItemGroup>
+</Project>
