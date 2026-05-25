@@ -6,6 +6,7 @@ artifacts/
 BenchmarkDotNet.Artifacts/
 .vs/
 [Tt]est[Rr]esults/
+*.db
 
 # Raw uploaded source art (the cleaned 256x256 versions live as docs/logo.png and docs/icon.png).
 docs/OrionPatchLogo.png
