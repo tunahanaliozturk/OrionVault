@@ -24,6 +24,9 @@
           Visible="false" />
   </ItemGroup>
   <ItemGroup>
+    <None Include="docs/README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+  <ItemGroup>
     <InternalsVisibleTo Include="Moongazing.OrionVault.Tests" />
     <InternalsVisibleTo Include="Moongazing.OrionVault.EntityFrameworkCore" />
     <InternalsVisibleTo Include="Moongazing.OrionVault.EntityFrameworkCore.Tests" />

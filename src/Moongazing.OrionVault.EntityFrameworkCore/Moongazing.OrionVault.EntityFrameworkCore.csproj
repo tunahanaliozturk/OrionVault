@@ -11,6 +11,9 @@
     <ProjectReference Include="..\Moongazing.OrionVault\Moongazing.OrionVault.csproj" />
   </ItemGroup>
   <ItemGroup>
+    <None Include="docs/README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+  <ItemGroup>
     <InternalsVisibleTo Include="Moongazing.OrionVault.EntityFrameworkCore.Tests" />
   </ItemGroup>
 </Project>
