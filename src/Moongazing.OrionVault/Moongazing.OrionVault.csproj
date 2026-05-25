@@ -23,4 +23,10 @@
           PackagePath="analyzers/dotnet/cs/"
           Visible="false" />
   </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Moongazing.OrionVault.Tests" />
+    <InternalsVisibleTo Include="Moongazing.OrionVault.EntityFrameworkCore" />
+    <InternalsVisibleTo Include="Moongazing.OrionVault.EntityFrameworkCore.Tests" />
+    <InternalsVisibleTo Include="Moongazing.OrionVault.Testing" />
+  </ItemGroup>
 </Project>
