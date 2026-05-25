@@ -3,6 +3,11 @@
     <TargetFramework>net8.0</TargetFramework>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
+    <!-- xUnit test names use underscores by convention; CA1707 does not apply to test methods. -->
+    <!-- EF1001 fires for any type whose namespace ends in '.Internal'; our internal converter classes
+         deliberately live in that namespace so consumers cannot depend on them. The diagnostic is
+         not relevant to test code that intentionally references those internal-by-design types. -->
+    <NoWarn>$(NoWarn);CA1707;EF1001</NoWarn>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" />

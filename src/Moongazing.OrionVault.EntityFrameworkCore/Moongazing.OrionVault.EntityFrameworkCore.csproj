@@ -9,4 +9,7 @@
     <PackageReference Include="Microsoft.EntityFrameworkCore" />
     <ProjectReference Include="..\Moongazing.OrionVault\Moongazing.OrionVault.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Moongazing.OrionVault.EntityFrameworkCore.Tests" />
+  </ItemGroup>
 </Project>
