@@ -25,6 +25,8 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "sample", "sample", "{4F9DEA
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Moongazing.OrionVault.Sample", "sample\Moongazing.OrionVault.Sample\Moongazing.OrionVault.Sample.csproj", "{9250D907-F183-4EF7-932F-4AC5DFEAB38F}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Moongazing.OrionVault.Analyzers.Tests", "test\Moongazing.OrionVault.Analyzers.Tests\Moongazing.OrionVault.Analyzers.Tests.csproj", "{1FA03B72-71CA-45A6-8A57-B56DCECE9900}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -131,6 +133,18 @@ Global
 		{9250D907-F183-4EF7-932F-4AC5DFEAB38F}.Release|x64.Build.0 = Release|Any CPU
 		{9250D907-F183-4EF7-932F-4AC5DFEAB38F}.Release|x86.ActiveCfg = Release|Any CPU
 		{9250D907-F183-4EF7-932F-4AC5DFEAB38F}.Release|x86.Build.0 = Release|Any CPU
+		{1FA03B72-71CA-45A6-8A57-B56DCECE9900}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{1FA03B72-71CA-45A6-8A57-B56DCECE9900}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{1FA03B72-71CA-45A6-8A57-B56DCECE9900}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{1FA03B72-71CA-45A6-8A57-B56DCECE9900}.Debug|x64.Build.0 = Debug|Any CPU
+		{1FA03B72-71CA-45A6-8A57-B56DCECE9900}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{1FA03B72-71CA-45A6-8A57-B56DCECE9900}.Debug|x86.Build.0 = Debug|Any CPU
+		{1FA03B72-71CA-45A6-8A57-B56DCECE9900}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{1FA03B72-71CA-45A6-8A57-B56DCECE9900}.Release|Any CPU.Build.0 = Release|Any CPU
+		{1FA03B72-71CA-45A6-8A57-B56DCECE9900}.Release|x64.ActiveCfg = Release|Any CPU
+		{1FA03B72-71CA-45A6-8A57-B56DCECE9900}.Release|x64.Build.0 = Release|Any CPU
+		{1FA03B72-71CA-45A6-8A57-B56DCECE9900}.Release|x86.ActiveCfg = Release|Any CPU
+		{1FA03B72-71CA-45A6-8A57-B56DCECE9900}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -144,5 +158,6 @@ Global
 		{C08D3127-DB74-44A5-8BE7-F80DB4D28690} = {0C88DD14-F956-CE84-757C-A364CCF449FC}
 		{EDE248AC-86F1-4471-B4D3-2B152362C1AB} = {0C88DD14-F956-CE84-757C-A364CCF449FC}
 		{9250D907-F183-4EF7-932F-4AC5DFEAB38F} = {4F9DEAE5-078F-E77A-2E4A-FEB6FFE226FF}
+		{1FA03B72-71CA-45A6-8A57-B56DCECE9900} = {0C88DD14-F956-CE84-757C-A364CCF449FC}
 	EndGlobalSection
 EndGlobal
