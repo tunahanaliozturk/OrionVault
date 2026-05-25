@@ -2,6 +2,7 @@ namespace Moongazing.OrionVault.DependencyInjection;
 
 using Microsoft.Extensions.DependencyInjection;
 using Moongazing.OrionVault.Abstractions;
+using Moongazing.OrionVault.Diagnostics;
 using Moongazing.OrionVault.Exceptions;
 using Moongazing.OrionVault.Internal;
 using Moongazing.OrionVault.Options;
@@ -31,6 +32,7 @@ public static class OrionVaultServiceCollectionExtensions
                 $"ActiveKeyId {options.ActiveKeyId} is not registered. Registered ids: [{string.Join(", ", keys.Keys)}].");
 
         services.AddSingleton<IKeyProvider>(_ => new StaticKeyProvider(keys, options.ActiveKeyId));
+        services.AddSingleton<OrionVaultDiagnostics>();
         services.AddSingleton<IEncryptor, AesGcmEncryptor>();
 
         return new OrionVaultBuilder(services);

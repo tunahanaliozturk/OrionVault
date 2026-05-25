@@ -1,33 +1,34 @@
 namespace Moongazing.OrionVault.Internal;
 
+using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using Moongazing.OrionVault.Abstractions;
+using Moongazing.OrionVault.Diagnostics;
 using Moongazing.OrionVault.Exceptions;
 
 internal sealed class AesGcmEncryptor : IEncryptor
 {
     private const int KeyLengthBytes = 32;
     private readonly IKeyProvider _keys;
+    private readonly OrionVaultDiagnostics _diag;
 
-    public AesGcmEncryptor(IKeyProvider keys)
+    public AesGcmEncryptor(IKeyProvider keys, OrionVaultDiagnostics diag)
     {
         ArgumentNullException.ThrowIfNull(keys);
+        ArgumentNullException.ThrowIfNull(diag);
         _keys = keys;
+        _diag = diag;
     }
 
     public byte[] EncryptString(string plaintext)
     {
         ArgumentNullException.ThrowIfNull(plaintext);
-        var bytes = Encoding.UTF8.GetBytes(plaintext);
-        return EncryptInternal(bytes);
+        return EncryptInternal(Encoding.UTF8.GetBytes(plaintext));
     }
 
     public string DecryptString(byte[] ciphertext)
-    {
-        var plain = DecryptInternal(ciphertext);
-        return Encoding.UTF8.GetString(plain);
-    }
+        => Encoding.UTF8.GetString(DecryptInternal(ciphertext));
 
     public byte[] EncryptBytes(byte[] plaintext)
     {
@@ -39,55 +40,113 @@ internal sealed class AesGcmEncryptor : IEncryptor
 
     private byte[] EncryptInternal(ReadOnlySpan<byte> plaintext)
     {
+        using var activity = _diag.ActivitySource.StartActivity("OrionVault.Encrypt", ActivityKind.Internal);
+        var sw = Stopwatch.GetTimestamp();
         var keyId = _keys.ActiveKeyId;
-        var key = _keys.TryGetKey(keyId)
-            ?? throw new OrionVaultConfigurationException(
-                $"Active key id {keyId} is not registered in the IKeyProvider.");
-        if (key.Length != KeyLengthBytes)
-            throw new OrionVaultConfigurationException(
-                $"Key {keyId} is {key.Length} bytes; expected {KeyLengthBytes}.");
+        activity?.SetTag("key_id", keyId);
+        activity?.SetTag("algorithm", "aes-gcm-256");
+        activity?.SetTag("payload_bytes", plaintext.Length);
 
-        var output = new byte[CipherFormat.HeaderSize + CipherFormat.TagSize + plaintext.Length];
-        var nonce = output.AsSpan(CipherFormat.KeyIdSize, CipherFormat.NonceSize);
-        RandomNumberGenerator.Fill(nonce);
+        try
+        {
+            var key = LookupKey(keyId);
+            var output = new byte[CipherFormat.HeaderSize + CipherFormat.TagSize + plaintext.Length];
+            var nonce = output.AsSpan(CipherFormat.KeyIdSize, CipherFormat.NonceSize);
+            RandomNumberGenerator.Fill(nonce);
+            CipherFormat.WriteHeader(output, keyId, nonce);
+            var tag = output.AsSpan(CipherFormat.HeaderSize, CipherFormat.TagSize);
+            var body = output.AsSpan(CipherFormat.HeaderSize + CipherFormat.TagSize);
 
-        CipherFormat.WriteHeader(output, keyId, nonce);
-        var tag = output.AsSpan(CipherFormat.HeaderSize, CipherFormat.TagSize);
-        var body = output.AsSpan(CipherFormat.HeaderSize + CipherFormat.TagSize);
+            using var aes = new AesGcm(key.Span, CipherFormat.TagSize);
+            aes.Encrypt(nonce, plaintext, body, tag);
 
-        using var aes = new AesGcm(key.Span, CipherFormat.TagSize);
-        aes.Encrypt(nonce, plaintext, body, tag);
-        return output;
+            _diag.Encryptions.Add(1,
+                new KeyValuePair<string, object?>("algorithm", "aes-gcm-256"),
+                new KeyValuePair<string, object?>("key_id", keyId));
+            return output;
+        }
+        finally
+        {
+            _diag.Duration.Record(Stopwatch.GetElapsedTime(sw).TotalMilliseconds,
+                new KeyValuePair<string, object?>("algorithm", "aes-gcm-256"),
+                new KeyValuePair<string, object?>("operation", "encrypt"));
+        }
     }
 
     private byte[] DecryptInternal(byte[] ciphertext)
     {
         ArgumentNullException.ThrowIfNull(ciphertext);
-        if (ciphertext.Length < CipherFormat.MinimumCiphertextLength)
-            throw new OrionVaultDecryptionException(
-                $"Ciphertext length {ciphertext.Length} is below the minimum {CipherFormat.MinimumCiphertextLength}.");
-
-        var keyId = CipherFormat.ReadKeyId(ciphertext);
-        var keyLookup = _keys.TryGetKey(keyId);
-        if (!keyLookup.HasValue || keyLookup.Value.IsEmpty)
-            throw new OrionVaultKeyNotFoundException(keyId);
-        var key = keyLookup.Value;
-
-        var nonce = CipherFormat.ReadNonce(ciphertext);
-        var tag = CipherFormat.ReadTag(ciphertext);
-        var body = CipherFormat.ReadBody(ciphertext);
-        var plaintext = new byte[body.Length];
+        using var activity = _diag.ActivitySource.StartActivity("OrionVault.Decrypt", ActivityKind.Internal);
+        var sw = Stopwatch.GetTimestamp();
+        short keyId = 0;
 
         try
         {
-            using var aes = new AesGcm(key.Span, CipherFormat.TagSize);
-            aes.Decrypt(nonce, body, tag, plaintext);
+            if (ciphertext.Length < CipherFormat.MinimumCiphertextLength)
+                throw new OrionVaultDecryptionException(
+                    $"Ciphertext length {ciphertext.Length} is below the minimum {CipherFormat.MinimumCiphertextLength}.");
+
+            keyId = CipherFormat.ReadKeyId(ciphertext);
+            activity?.SetTag("key_id", keyId);
+            activity?.SetTag("algorithm", "aes-gcm-256");
+
+            var key = LookupKey(keyId);
+            var nonce = CipherFormat.ReadNonce(ciphertext);
+            var tag = CipherFormat.ReadTag(ciphertext);
+            var body = CipherFormat.ReadBody(ciphertext);
+            var plaintext = new byte[body.Length];
+
+            try
+            {
+                using var aes = new AesGcm(key.Span, CipherFormat.TagSize);
+                aes.Decrypt(nonce, body, tag, plaintext);
+            }
+            catch (CryptographicException ex)
+            {
+                _diag.DecryptionFailures.Add(1,
+                    new KeyValuePair<string, object?>("reason", "tampered"),
+                    new KeyValuePair<string, object?>("key_id", keyId));
+                activity?.SetTag("outcome", "tampered");
+                throw new OrionVaultDecryptionException(
+                    "Ciphertext failed authentication (tampered, wrong key, or corrupted).", ex);
+            }
+
+            _diag.Decryptions.Add(1,
+                new KeyValuePair<string, object?>("algorithm", "aes-gcm-256"),
+                new KeyValuePair<string, object?>("key_id", keyId));
+            activity?.SetTag("outcome", "success");
             return plaintext;
         }
-        catch (CryptographicException ex)
+        catch (OrionVaultKeyNotFoundException)
         {
-            throw new OrionVaultDecryptionException(
-                "Ciphertext failed authentication (tampered, wrong key, or corrupted).", ex);
+            _diag.DecryptionFailures.Add(1,
+                new KeyValuePair<string, object?>("reason", "key_not_found"),
+                new KeyValuePair<string, object?>("key_id", keyId));
+            activity?.SetTag("outcome", "key_not_found");
+            throw;
         }
+        finally
+        {
+            _diag.Duration.Record(Stopwatch.GetElapsedTime(sw).TotalMilliseconds,
+                new KeyValuePair<string, object?>("algorithm", "aes-gcm-256"),
+                new KeyValuePair<string, object?>("operation", "decrypt"));
+        }
+    }
+
+    private ReadOnlyMemory<byte> LookupKey(short keyId)
+    {
+        var k = _keys.TryGetKey(keyId);
+        _diag.KeyLookups.Add(1,
+            new KeyValuePair<string, object?>("key_id", keyId),
+            new KeyValuePair<string, object?>("outcome", k.HasValue && !k.Value.IsEmpty ? "hit" : "miss"));
+        if (!k.HasValue || k.Value.IsEmpty)
+        {
+            _diag.KeyNotFound.Add(1, new KeyValuePair<string, object?>("key_id", keyId));
+            throw new OrionVaultKeyNotFoundException(keyId);
+        }
+        if (k.Value.Length != KeyLengthBytes)
+            throw new OrionVaultConfigurationException(
+                $"Key {keyId} is {k.Value.Length} bytes; expected {KeyLengthBytes}.");
+        return k.Value;
     }
 }
