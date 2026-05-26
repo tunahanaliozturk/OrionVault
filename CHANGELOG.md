@@ -4,6 +4,16 @@ All notable changes to OrionVault are recorded here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-05-26
+
+### Changed
+
+- BREAKING: package IDs renamed from `Moongazing.OrionVault[.X]` to `OrionVault[.X]` to match the rest of the Orion family (OrionGuard, OrionAudit, OrionLock, OrionKey, OrionPatch all ship without the `Moongazing.` prefix). Existing 0.1.0 / 0.1.1 packages under the old IDs remain available on NuGet for backward compatibility but will not receive further updates; new development should reference the unprefixed packages.
+
+### Migration
+
+Replace `<PackageReference Include="Moongazing.OrionVault" Version="0.1.1" />` with `<PackageReference Include="OrionVault" Version="0.1.2" />` (same for `.EntityFrameworkCore` and `.Testing`). No code changes required; namespaces and public API are unchanged.
+
 ## [0.1.1] - 2026-05-26
 
 ### Changed
