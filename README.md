@@ -25,6 +25,57 @@ The threat model is narrow and explicit: an attacker who obtains a database back
 
 This is not full-database TDE. It is not key management. It is the EF Core integration layer that sits on top of `System.Security.Cryptography.AesGcm` and a pluggable `IKeyProvider`. The v0.1.0 key provider is in-config (`UseStaticKeys`); cloud KMS providers (AWS, Azure, HashiCorp, DPAPI) are scheduled for v0.2 and v0.4.
 
+## How it works
+
+EF Core sees the property as `string` (or `byte[]`); the storage column is `byte[]`. A value converter sits between the two and routes through OrionVault's encryptor on write and decryptor on read.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant App as Application code
+    participant Ent as Entity property<br/>(plaintext string)
+    participant VC as OrionVault<br/>ValueConverter
+    participant Enc as AesGcmEncryptor
+    participant KP as IKeyProvider
+    participant DB as Database column<br/>(byte[])
+
+    rect rgba(224, 231, 255, 0.5)
+        Note over App,DB: Write path (SaveChanges)
+        App->>Ent: customer.Email = "ali@example.com"
+        Ent->>VC: convert to provider value
+        VC->>KP: get key for ActiveKeyId
+        KP-->>VC: 32-byte key
+        VC->>Enc: Encrypt(plaintext, keyId, key)
+        Enc-->>VC: [keyId | nonce | tag | ciphertext]
+        VC->>DB: INSERT/UPDATE varbinary
+    end
+
+    rect rgba(220, 252, 231, 0.5)
+        Note over App,DB: Read path (query materialization)
+        DB->>VC: row bytes
+        VC->>VC: parse keyId from header
+        VC->>KP: get key for keyId
+        KP-->>VC: 32-byte key (may be retired)
+        VC->>Enc: Decrypt(bytes, key)
+        Enc-->>VC: plaintext bytes
+        VC->>Ent: customer.Email = "ali@example.com"
+    end
+```
+
+The on-disk layout decoded above is fixed: a two-byte big-endian key id, a 12-byte AES-GCM nonce, a 16-byte authentication tag, then the ciphertext body. The reader pulls the key id first so it can ask the key provider for the exact key that wrote the row, which is what makes online key rotation work.
+
+```mermaid
+flowchart LR
+    KeyId["keyId<br/>2 bytes BE"] --> Nonce["nonce<br/>12 bytes"]
+    Nonce --> Tag["tag<br/>16 bytes"]
+    Tag --> Cipher["ciphertext<br/>N bytes (= len plaintext)"]
+
+    classDef hdr fill:#dbeafe,stroke:#1e40af,color:#1e3a8a
+    classDef body fill:#fce7f3,stroke:#9d174d,color:#831843
+    class KeyId,Nonce,Tag hdr
+    class Cipher body
+```
+
 ## What's in the box
 
 | Package | Description |
@@ -198,6 +249,10 @@ services.AddOpenTelemetry().WithMetrics(m => m
 ```
 
 Spans wrap individual encrypt and decrypt operations and are useful when correlating slow `SaveChanges` calls or unexpected decryption failures.
+
+## Benchmarks
+
+See [benchmarks.md](benchmarks.md) for the scenarios we plan to measure (encrypt and decrypt throughput across payload sizes, value-converter overhead vs. a manual `ValueConverter`, key-lookup contention) and the comparison baselines we will report against. A formal `bench/Moongazing.OrionVault.Bench` project is on the v0.2 roadmap.
 
 ## Testing
 
