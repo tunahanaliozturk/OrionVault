@@ -278,6 +278,13 @@ See [ROADMAP.md](ROADMAP.md) for the full 12-month plan. Highlights:
 
 If something on the list matters to you, open an issue with the `roadmap` label.
 
+### See it in a real app
+
+[Moongazing.OrionShowcase](https://github.com/tunahanaliozturk/OrionShowcase) is a production-shaped banking sample integrating all six Orion packages end-to-end. OrionVault encrypts customer PII columns (TCKN, email, phone) as bytea on Postgres. The integration test reads raw bytes directly and verifies the [keyId|nonce|tag|ciphertext] header layout. Concrete usage:
+
+- [src/Moongazing.OrionShowcase.Infrastructure/Persistence/Configurations/CustomerConfiguration.cs](https://github.com/tunahanaliozturk/OrionShowcase/blob/main/src/Moongazing.OrionShowcase.Infrastructure/Persistence/Configurations/CustomerConfiguration.cs)
+- [test/Moongazing.OrionShowcase.IntegrationTests/Scenarios/PiiEncryptionTests.cs](https://github.com/tunahanaliozturk/OrionShowcase/blob/main/test/Moongazing.OrionShowcase.IntegrationTests/Scenarios/PiiEncryptionTests.cs)
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
