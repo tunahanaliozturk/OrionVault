@@ -346,4 +346,4 @@ MIT. See [LICENSE](LICENSE).
 
 ## Contributing
 
-Issues and pull requests are welcome. Please open an issue first for anything larger than a bug fix or a docs tweak so we can agree on the shape before you spend time on it.
+Issues and pull requests welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md) and the [Code of Conduct](CODE_OF_CONDUCT.md) before opening one.
