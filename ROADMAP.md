@@ -11,12 +11,18 @@ OrionVault follows the same release rhythm as the rest of the Orion family: quar
 - Testing package with deterministic `TestKeyProvider`
 - Telemetry: 1 ActivitySource, 5 counters, 1 histogram
 
-## v0.2 - 2026-Q4
+## v0.2.0 - 2026-06-03 *(shipped)*
 
-- AWS KMS provider (`Moongazing.OrionVault.AwsKms`)
-- Azure Key Vault provider (`Moongazing.OrionVault.AzureKeyVault`)
-- Background re-encryption hosted service for draining retired keys
-- First-class multi-DbContext support
+- Background re-encryption hosted service (`IReEncryptionTarget` + `ReEncryptionHostedService` + `ReEncryptionOptions`). Drains rows still encrypted under retired keys on a configurable schedule with telemetry and shutdown drain.
+- New telemetry instruments: `orionvault.reencryption.rows_processed` counter and `orionvault.reencryption.batch_duration_ms` histogram on the existing `Moongazing.OrionVault` Meter.
+
+### Deferred from v0.2.0 to follow-up patches
+
+The original v0.2 milestone listed four items. Three move to focused follow-up patches:
+
+- **AWS KMS provider** (`Moongazing.OrionVault.AwsKms`) -> v0.2.1
+- **Azure Key Vault provider** (`Moongazing.OrionVault.AzureKeyVault`) -> v0.2.2
+- **First-class multi-DbContext support** -> v0.2.3
 
 ## v0.3 - 2027-Q1
 
