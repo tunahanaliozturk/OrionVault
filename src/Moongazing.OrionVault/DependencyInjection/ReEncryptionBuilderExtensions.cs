@@ -33,22 +33,25 @@ public static class ReEncryptionBuilderExtensions
             builder.Services.Configure(configure);
         }
 
-        builder.Services.TryAddSingleton<IReEncryptionTarget, NullReEncryptionTarget>();
+        // Target is resolved per batch from a fresh DI scope so EF Core DbContext
+        // dependencies (or anything else scoped) work correctly under scope validation.
+        builder.Services.TryAddScoped<IReEncryptionTarget, NullReEncryptionTarget>();
         builder.Services.AddHostedService<ReEncryptionHostedService>();
 
         return builder;
     }
 
     /// <summary>
-    /// Register a singleton <see cref="IReEncryptionTarget"/> implementation. Replaces the
-    /// default no-op target so the hosted service has work to do.
+    /// Register a scoped <see cref="IReEncryptionTarget"/> implementation. Replaces the
+    /// default no-op target so the hosted service has work to do. Scoped lifetime so
+    /// EF Core DbContext and other scoped dependencies resolve correctly on each batch.
     /// </summary>
     public static OrionVaultBuilder UseReEncryptionTarget<T>(this OrionVaultBuilder builder)
         where T : class, IReEncryptionTarget
     {
         ArgumentNullException.ThrowIfNull(builder);
         builder.Services.RemoveAll<IReEncryptionTarget>();
-        builder.Services.AddSingleton<IReEncryptionTarget, T>();
+        builder.Services.AddScoped<IReEncryptionTarget, T>();
         return builder;
     }
 

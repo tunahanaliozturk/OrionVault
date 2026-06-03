@@ -151,7 +151,11 @@ public sealed class ReEncryptionHostedServiceTests
             DrainTimeout = TimeSpan.FromSeconds(1),
         };
         var monitor = new StaticOptionsMonitor<ReEncryptionOptions>(opts);
-        return new ReEncryptionHostedService(target, diagnostics, monitor, NullLogger<ReEncryptionHostedService>.Instance);
+        var services = new ServiceCollection();
+        services.AddScoped(_ => target);
+        var provider = services.BuildServiceProvider();
+        var scopeFactory = provider.GetRequiredService<IServiceScopeFactory>();
+        return new ReEncryptionHostedService(scopeFactory, diagnostics, monitor, NullLogger<ReEncryptionHostedService>.Instance);
     }
 
     private sealed class StaticOptionsMonitor<T> : IOptionsMonitor<T>

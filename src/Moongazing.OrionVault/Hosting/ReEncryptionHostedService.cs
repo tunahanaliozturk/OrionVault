@@ -1,6 +1,7 @@
 namespace Moongazing.OrionVault.Hosting;
 
 using System.Diagnostics;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -17,19 +18,19 @@ using Moongazing.OrionVault.Options;
 /// </summary>
 public sealed partial class ReEncryptionHostedService : BackgroundService
 {
-    private readonly IReEncryptionTarget target;
+    private readonly IServiceScopeFactory scopeFactory;
     private readonly OrionVaultDiagnostics diagnostics;
     private readonly IOptionsMonitor<ReEncryptionOptions> options;
     private readonly ILogger<ReEncryptionHostedService> logger;
 
     /// <summary>Constructor.</summary>
     public ReEncryptionHostedService(
-        IReEncryptionTarget target,
+        IServiceScopeFactory scopeFactory,
         OrionVaultDiagnostics diagnostics,
         IOptionsMonitor<ReEncryptionOptions> options,
         ILogger<ReEncryptionHostedService> logger)
     {
-        this.target = target ?? throw new ArgumentNullException(nameof(target));
+        this.scopeFactory = scopeFactory ?? throw new ArgumentNullException(nameof(scopeFactory));
         this.diagnostics = diagnostics ?? throw new ArgumentNullException(nameof(diagnostics));
         this.options = options ?? throw new ArgumentNullException(nameof(options));
         this.logger = logger ?? throw new ArgumentNullException(nameof(logger));
@@ -73,10 +74,17 @@ public sealed partial class ReEncryptionHostedService : BackgroundService
         var sw = Stopwatch.StartNew();
         try
         {
-            var processed = await target.ReEncryptBatchAsync(cancellationToken).ConfigureAwait(false);
-            diagnostics.ReEncryptionRowsProcessed.Add(processed);
-            activity?.SetTag("orionvault.reencryption.rows_processed", processed);
-            LogBatchOk(logger, processed, sw.Elapsed.TotalMilliseconds);
+            // Fresh DI scope per batch so scoped consumer dependencies (DbContext etc.)
+            // are not captured across the lifetime of the singleton hosted service.
+            var scope = scopeFactory.CreateAsyncScope();
+            await using (scope.ConfigureAwait(false))
+            {
+                var target = scope.ServiceProvider.GetRequiredService<IReEncryptionTarget>();
+                var processed = await target.ReEncryptBatchAsync(cancellationToken).ConfigureAwait(false);
+                diagnostics.ReEncryptionRowsProcessed.Add(processed);
+                activity?.SetTag("orionvault.reencryption.rows_processed", processed);
+                LogBatchOk(logger, processed, sw.Elapsed.TotalMilliseconds);
+            }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
