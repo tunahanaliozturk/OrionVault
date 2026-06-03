@@ -17,11 +17,13 @@ public sealed class OrionVaultDiagnostics : IDisposable
     internal Counter<long> KeyLookups { get; }
     internal Counter<long> KeyNotFound { get; }
     internal Histogram<double> Duration { get; }
+    internal Counter<long> ReEncryptionRowsProcessed { get; }
+    internal Histogram<double> ReEncryptionBatchDuration { get; }
 
     public OrionVaultDiagnostics()
     {
-        ActivitySource = new ActivitySource(ActivitySourceName, "0.1.0");
-        Meter = new Meter(MeterName, "0.1.0");
+        ActivitySource = new ActivitySource(ActivitySourceName, "0.2.0");
+        Meter = new Meter(MeterName, "0.2.0");
         Encryptions = Meter.CreateCounter<long>("orionvault.encryptions", "{operations}",
             "Number of encryption operations performed.");
         Decryptions = Meter.CreateCounter<long>("orionvault.decryptions", "{operations}",
@@ -34,6 +36,10 @@ public sealed class OrionVaultDiagnostics : IDisposable
             "Number of times the IKeyProvider returned null for a key id.");
         Duration = Meter.CreateHistogram<double>("orionvault.encryption.duration_ms", "ms",
             "Duration of encrypt/decrypt operations.");
+        ReEncryptionRowsProcessed = Meter.CreateCounter<long>("orionvault.reencryption.rows_processed", "{rows}",
+            "Number of rows re-encrypted by the background re-encryption service.");
+        ReEncryptionBatchDuration = Meter.CreateHistogram<double>("orionvault.reencryption.batch_duration_ms", "ms",
+            "Duration of one re-encryption batch.");
     }
 
     public void Dispose()
