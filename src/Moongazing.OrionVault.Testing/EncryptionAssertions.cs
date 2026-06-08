@@ -1,5 +1,6 @@
 namespace Moongazing.OrionVault.Testing;
 
+using System.Diagnostics.CodeAnalysis;
 using System.Text;
 using Moongazing.OrionVault.Abstractions;
 using Moongazing.OrionVault.Internal;
@@ -54,6 +55,48 @@ public static class EncryptionAssertions
     {
         ArgumentNullException.ThrowIfNull(provider);
         IsEncryptedWithKey(columnValue, provider.ActiveKeyId);
+    }
+
+    /// <summary>
+    /// Asserts <paramref name="columnValue"/> is NOT encrypted under any key registered with
+    /// the supplied <paramref name="encryptor"/> by attempting a real decrypt and asserting
+    /// it fails. Distinct from the dropped v0.2.1 length-only heuristic: a long plaintext
+    /// column that happens to be larger than <c>CipherFormat.MinimumCiphertextLength</c> now
+    /// classifies correctly because the decrypt fails on auth tag verification.
+    /// </summary>
+    /// <remarks>
+    /// Pairs with <c>RemovedEncryptedAttribute</c>-style regression tests: confirm that after
+    /// removing <c>[Encrypted]</c> from a property, the column on disk is plaintext rather
+    /// than ciphertext under a previously-active key. The implementation tolerates the
+    /// fast-path (column shorter than the minimum ciphertext layout) by returning early.
+    /// </remarks>
+    public static void IsNotEncrypted(byte[] columnValue, IEncryptor encryptor)
+    {
+        ArgumentNullException.ThrowIfNull(columnValue);
+        ArgumentNullException.ThrowIfNull(encryptor);
+
+        // Too short to even carry the OrionVault header: definitely not encrypted.
+        if (columnValue.Length < CipherFormat.MinimumCiphertextLength)
+        {
+            return;
+        }
+
+        // Attempt a decrypt. If it succeeds, the bytes are valid OrionVault ciphertext under
+        // a registered key and the assertion fails. If the decrypt throws (wrong header,
+        // unknown key id, AES-GCM tag mismatch), the bytes are not OrionVault ciphertext.
+        try
+        {
+            _ = encryptor.DecryptBytes(columnValue);
+        }
+#pragma warning disable CA1031 // we deliberately catch everything: any decrypt failure means "not ciphertext under any registered key"
+        catch
+#pragma warning restore CA1031
+        {
+            return;
+        }
+
+        throw new Xunit.Sdk.XunitException(
+            "Expected plaintext column but decryptor returned a valid plaintext under a registered OrionVault key.");
     }
 
     /// <summary>
