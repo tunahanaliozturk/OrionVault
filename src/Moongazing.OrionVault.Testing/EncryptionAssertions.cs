@@ -1,14 +1,21 @@
 namespace Moongazing.OrionVault.Testing;
 
+using System.Text;
+using Moongazing.OrionVault.Abstractions;
 using Moongazing.OrionVault.Internal;
 
 /// <summary>
-/// Assertion helpers that inspect raw column bytes produced by OrionVault.
-/// Throws <see cref="Xunit.Sdk.XunitException"/> so failures show up as
-/// regular xUnit assertion failures.
+/// Assertion helpers that inspect raw column bytes produced by OrionVault. Throws
+/// <see cref="Xunit.Sdk.XunitException"/> so failures show up as regular xUnit assertion
+/// failures.
 /// </summary>
 public static class EncryptionAssertions
 {
+    /// <summary>
+    /// Asserts that <paramref name="columnValue"/> is an OrionVault-shaped ciphertext: at
+    /// least <c>HeaderSize + TagSize</c> bytes long, so the key id, nonce, and tag are all
+    /// representable. Does not attempt to decrypt - use the encryptor for that.
+    /// </summary>
     public static void IsEncrypted(byte[] columnValue)
     {
         ArgumentNullException.ThrowIfNull(columnValue);
@@ -19,12 +26,14 @@ public static class EncryptionAssertions
         }
     }
 
+    /// <summary>Reads the key id from the OrionVault ciphertext header.</summary>
     public static short ReadKeyId(byte[] columnValue)
     {
         IsEncrypted(columnValue);
         return CipherFormat.ReadKeyId(columnValue);
     }
 
+    /// <summary>Asserts the column is encrypted under <paramref name="expectedKeyId"/>.</summary>
     public static void IsEncryptedWithKey(byte[] columnValue, short expectedKeyId)
     {
         var actual = ReadKeyId(columnValue);
@@ -32,6 +41,64 @@ public static class EncryptionAssertions
         {
             throw new Xunit.Sdk.XunitException(
                 $"Expected encrypted with key id {expectedKeyId}, got {actual}.");
+        }
+    }
+
+    /// <summary>
+    /// Asserts the column is encrypted under the <see cref="IKeyProvider.ActiveKeyId"/> of
+    /// the supplied <paramref name="provider"/>. Useful for re-encryption rollout tests
+    /// where you want to confirm a row has migrated to the current key after the background
+    /// re-encryption service has run.
+    /// </summary>
+    public static void IsEncryptedWithActiveKey(byte[] columnValue, IKeyProvider provider)
+    {
+        ArgumentNullException.ThrowIfNull(provider);
+        IsEncryptedWithKey(columnValue, provider.ActiveKeyId);
+    }
+
+    /// <summary>
+    /// Decodes <paramref name="columnValue"/> as strict UTF-8 (throws on invalid bytes) and
+    /// asserts that the result does NOT contain <paramref name="expectedPlaintext"/>. Bytes
+    /// that fail to decode as UTF-8 are treated as "definitely not the plaintext", which
+    /// matches the intended ciphertext-bytes-on-disk scenario.
+    /// </summary>
+    /// <remarks>
+    /// Use this for the "I just inserted a row with <c>'secret123'</c> as the value, prove it
+    /// is not stored verbatim on disk" assertion when the consumer reads back the raw column
+    /// via raw SQL. Pairs with the v0.2.0 background re-encryption service so consumer
+    /// integration tests can demonstrate that re-encrypted rows do not leak plaintext via the
+    /// previous key.
+    /// </remarks>
+    public static void DoesNotContainPlaintext(byte[] columnValue, string expectedPlaintext)
+    {
+        ArgumentNullException.ThrowIfNull(columnValue);
+        ArgumentException.ThrowIfNullOrEmpty(expectedPlaintext);
+
+        var decoded = TryDecodeStrictUtf8(columnValue);
+        if (decoded is not null && decoded.Contains(expectedPlaintext, StringComparison.Ordinal))
+        {
+            throw new Xunit.Sdk.XunitException(
+                $"Expected plaintext '{expectedPlaintext}' NOT to appear in the column bytes, but it did.");
+        }
+    }
+
+    // System.Text.Encoding.UTF8 silently replaces invalid bytes with U+FFFD instead of
+    // throwing - so a ciphertext byte run could decode to a noisy string containing a
+    // false positive. Use a strict encoding that throws on the first invalid byte so
+    // ciphertext input is reliably classified as "not utf-8 = does not contain plaintext".
+    private static readonly Encoding StrictUtf8 = new UTF8Encoding(
+        encoderShouldEmitUTF8Identifier: false,
+        throwOnInvalidBytes: true);
+
+    private static string? TryDecodeStrictUtf8(byte[] bytes)
+    {
+        try
+        {
+            return StrictUtf8.GetString(bytes);
+        }
+        catch (DecoderFallbackException)
+        {
+            return null;
         }
     }
 }
