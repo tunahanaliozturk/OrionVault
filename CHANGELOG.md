@@ -4,6 +4,34 @@ All notable changes to OrionVault are recorded here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-06-04
+
+### Added
+
+#### `EncryptionAssertions` testing helpers
+
+Three additive assertions on the existing `Moongazing.OrionVault.Testing.EncryptionAssertions` surface for at-rest validation in consumer integration tests:
+
+- **`IsEncryptedWithActiveKey(byte[], IKeyProvider)`** - asserts the column is encrypted under the supplied provider's `ActiveKeyId`. Useful for re-encryption rollout tests where you want to confirm rows have migrated to the current key after the v0.2.0 background re-encryption service has run.
+- **`IsNotEncrypted(byte[])`** - asserts the column is too short to carry the OrionVault header. Regression-test catch for "removed `[Encrypted]` from a property; prove the column is now plaintext on disk".
+- **`DoesNotContainPlaintext(byte[], string expected)`** - decodes the column as UTF-8 and asserts the literal plaintext does not appear. The "I just inserted 'secret123'; prove it is not stored verbatim" assertion when the consumer reads back the raw column via raw SQL.
+
+xmldoc on every public method now documents the failure shape, intended consumer scenario, and the relationship to the existing AES-GCM / `CipherFormat` layout.
+
+### Deferred
+
+Original v0.2 milestone retargeting from the v0.2.0 CHANGELOG holds. The AWS KMS provider was originally targeted at v0.2.1 here. It is retargeted to **v0.2.2** because credible delivery requires LocalStack-based integration testing + an `Amazon.Extensions.Configuration.SystemsManager`-shaped option binder, both of which are larger than this patch can credibly contain. v0.2.1 ships the highest-value testing-side helpers instead so the v0.2.0 background re-encryption service has matching assertion ergonomics. Other targets unchanged:
+
+- **AWS KMS provider** -> v0.2.2 (retargeted from v0.2.1)
+- **Azure Key Vault provider** -> v0.2.3 (retargeted from v0.2.2)
+- **First-class multi-DbContext support** -> v0.2.4 (retargeted from v0.2.3)
+
+`ROADMAP.md` reflects the new sequence.
+
+### Migration from v0.2.0
+
+Source-compatible. The new assertions are additive on the existing static `EncryptionAssertions` class; no DI changes are required.
+
 ## [0.2.0] - 2026-06-03
 
 ### Added
