@@ -10,13 +10,12 @@ All notable changes to OrionVault are recorded here. Format follows [Keep a Chan
 
 #### `EncryptionAssertions` testing helpers
 
-Three additive assertions on the existing `Moongazing.OrionVault.Testing.EncryptionAssertions` surface for at-rest validation in consumer integration tests:
+Two additive assertions on the existing `Moongazing.OrionVault.Testing.EncryptionAssertions` surface for at-rest validation in consumer integration tests:
 
 - **`IsEncryptedWithActiveKey(byte[], IKeyProvider)`** - asserts the column is encrypted under the supplied provider's `ActiveKeyId`. Useful for re-encryption rollout tests where you want to confirm rows have migrated to the current key after the v0.2.0 background re-encryption service has run.
-- **`IsNotEncrypted(byte[])`** - asserts the column is too short to carry the OrionVault header. Regression-test catch for "removed `[Encrypted]` from a property; prove the column is now plaintext on disk".
-- **`DoesNotContainPlaintext(byte[], string expected)`** - decodes the column as UTF-8 and asserts the literal plaintext does not appear. The "I just inserted 'secret123'; prove it is not stored verbatim" assertion when the consumer reads back the raw column via raw SQL.
+- **`DoesNotContainPlaintext(byte[], string expected)`** - decodes the column under STRICT UTF-8 (`UTF8Encoding(throwOnInvalidBytes: true)`) and asserts the literal plaintext does not appear. The "I just inserted 'secret123'; prove it is not stored verbatim" assertion when the consumer reads back the raw column via raw SQL. Strict decoding matters: the default `Encoding.UTF8` silently replaces invalid bytes with U+FFFD, which would let stray ciphertext bytes decode to noisy text and risk false positives.
 
-xmldoc on every public method now documents the failure shape, intended consumer scenario, and the relationship to the existing AES-GCM / `CipherFormat` layout.
+xmldoc on every public method documents the failure shape, intended consumer scenario, and the relationship to the existing AES-GCM / `CipherFormat` layout.
 
 ### Deferred
 
@@ -25,6 +24,7 @@ Original v0.2 milestone retargeting from the v0.2.0 CHANGELOG holds. The AWS KMS
 - **AWS KMS provider** -> v0.2.2 (retargeted from v0.2.1)
 - **Azure Key Vault provider** -> v0.2.3 (retargeted from v0.2.2)
 - **First-class multi-DbContext support** -> v0.2.4 (retargeted from v0.2.3)
+- **`IsNotEncrypted(byte[])`** helper - deferred from this PR because a length-based heuristic gives false positives on long plaintext columns. v0.2.x will ship the encryptor-backed variant `IsNotEncrypted(byte[], IEncryptor, IKeyProvider)` that attempts a decrypt and only passes when the decrypt fails for every registered key.
 
 `ROADMAP.md` reflects the new sequence.
 
@@ -102,7 +102,8 @@ Replace `<PackageReference Include="Moongazing.OrionVault" Version="0.1.1" />` w
 - Only `string` and `byte[]` CLR types are supported. Numeric/DateTime/decimal/JSON types are on the v0.3 roadmap.
 - No cloud KMS providers yet (AWS, Azure, GCP, HashiCorp, DPAPI). All planned for v0.2 / v0.4 roadmap.
 
-[Unreleased]: https://github.com/tunahanaliozturk/OrionVault/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/tunahanaliozturk/OrionVault/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/tunahanaliozturk/OrionVault/releases/tag/v0.2.1
 [0.2.0]: https://github.com/tunahanaliozturk/OrionVault/releases/tag/v0.2.0
 [0.1.2]: https://github.com/tunahanaliozturk/OrionVault/releases/tag/v0.1.2
 [0.1.1]: https://github.com/tunahanaliozturk/OrionVault/releases/tag/v0.1.1

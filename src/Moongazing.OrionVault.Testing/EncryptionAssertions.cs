@@ -57,33 +57,24 @@ public static class EncryptionAssertions
     }
 
     /// <summary>
-    /// Asserts that <paramref name="columnValue"/> is NOT encrypted (too short to carry the
-    /// OrionVault header). Useful for regression tests that confirm a column that was
-    /// previously encrypted is now plaintext after the <c>[Encrypted]</c> attribute or
-    /// <c>IsEncrypted()</c> wiring has been removed.
+    /// Decodes <paramref name="columnValue"/> as strict UTF-8 (throws on invalid bytes) and
+    /// asserts that the result does NOT contain <paramref name="expectedPlaintext"/>. Bytes
+    /// that fail to decode as UTF-8 are treated as "definitely not the plaintext", which
+    /// matches the intended ciphertext-bytes-on-disk scenario.
     /// </summary>
-    public static void IsNotEncrypted(byte[] columnValue)
-    {
-        ArgumentNullException.ThrowIfNull(columnValue);
-        if (columnValue.Length >= CipherFormat.MinimumCiphertextLength)
-        {
-            throw new Xunit.Sdk.XunitException(
-                $"Expected plaintext column (< {CipherFormat.MinimumCiphertextLength} bytes), got {columnValue.Length} bytes that match the OrionVault ciphertext shape.");
-        }
-    }
-
-    /// <summary>
-    /// Decodes <paramref name="columnValue"/> as a UTF-8 string and asserts that the result
-    /// does NOT contain <paramref name="expectedPlaintext"/>. Useful for the "I just inserted
-    /// a row with 'secret123' as the value, prove it is not stored verbatim on disk" assertion
-    /// when the consumer reads back the raw column via raw SQL.
-    /// </summary>
+    /// <remarks>
+    /// Use this for the "I just inserted a row with <c>'secret123'</c> as the value, prove it
+    /// is not stored verbatim on disk" assertion when the consumer reads back the raw column
+    /// via raw SQL. Pairs with the v0.2.0 background re-encryption service so consumer
+    /// integration tests can demonstrate that re-encrypted rows do not leak plaintext via the
+    /// previous key.
+    /// </remarks>
     public static void DoesNotContainPlaintext(byte[] columnValue, string expectedPlaintext)
     {
         ArgumentNullException.ThrowIfNull(columnValue);
         ArgumentException.ThrowIfNullOrEmpty(expectedPlaintext);
 
-        var decoded = TryDecodeUtf8(columnValue);
+        var decoded = TryDecodeStrictUtf8(columnValue);
         if (decoded is not null && decoded.Contains(expectedPlaintext, StringComparison.Ordinal))
         {
             throw new Xunit.Sdk.XunitException(
@@ -91,15 +82,21 @@ public static class EncryptionAssertions
         }
     }
 
-    private static string? TryDecodeUtf8(byte[] bytes)
+    // System.Text.Encoding.UTF8 silently replaces invalid bytes with U+FFFD instead of
+    // throwing - so a ciphertext byte run could decode to a noisy string containing a
+    // false positive. Use a strict encoding that throws on the first invalid byte so
+    // ciphertext input is reliably classified as "not utf-8 = does not contain plaintext".
+    private static readonly Encoding StrictUtf8 = new UTF8Encoding(
+        encoderShouldEmitUTF8Identifier: false,
+        throwOnInvalidBytes: true);
+
+    private static string? TryDecodeStrictUtf8(byte[] bytes)
     {
         try
         {
-            return Encoding.UTF8.GetString(bytes);
+            return StrictUtf8.GetString(bytes);
         }
-#pragma warning disable CA1031 // decode failure means "not utf-8", which is exactly what we want for ciphertext
-        catch
-#pragma warning restore CA1031
+        catch (DecoderFallbackException)
         {
             return null;
         }

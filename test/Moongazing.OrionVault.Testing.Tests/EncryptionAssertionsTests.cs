@@ -31,21 +31,6 @@ public sealed class EncryptionAssertionsTests
     }
 
     [Fact]
-    public void IsNotEncrypted_passes_on_plaintext_short_bytes()
-    {
-        // Plaintext "hello" - 5 UTF-8 bytes, well below the 30-byte ciphertext threshold.
-        EncryptionAssertions.IsNotEncrypted(Encoding.UTF8.GetBytes("hello"));
-    }
-
-    [Fact]
-    public void IsNotEncrypted_throws_on_ciphertext_shaped_bytes()
-    {
-        var ex = Assert.Throws<Xunit.Sdk.XunitException>(
-            () => EncryptionAssertions.IsNotEncrypted(BuildCiphertext(1)));
-        Assert.Contains("Expected plaintext column", ex.Message, StringComparison.Ordinal);
-    }
-
-    [Fact]
     public void IsEncryptedWithActiveKey_passes_when_key_id_matches()
     {
         var provider = new TestKeyProvider(activeKeyId: 7);
