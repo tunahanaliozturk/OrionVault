@@ -103,6 +103,30 @@ public sealed class AwsKmsKeyProviderTests
         Assert.Contains("base64", ex.Message, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task CreateAsync_throws_when_ciphertext_is_whitespace()
+    {
+        var kms = new Mock<IAmazonKeyManagementService>();
+        var opts = new AwsKmsKeyProviderOptions { ActiveKeyId = 1 };
+        opts.WrappedKeys[1] = "   ";
+
+        await Assert.ThrowsAsync<OrionVaultConfigurationException>(
+            () => AwsKmsKeyProvider.CreateAsync(kms.Object, opts));
+    }
+
+    [Fact]
+    public async Task CreateAsync_throws_when_decoded_ciphertext_is_zero_bytes()
+    {
+        var kms = new Mock<IAmazonKeyManagementService>();
+        var opts = new AwsKmsKeyProviderOptions { ActiveKeyId = 1 };
+        // Empty-string base64 decodes to zero bytes, so the KMS call would fail; we reject
+        // it deterministically at startup before invoking the SDK.
+        opts.WrappedKeys[1] = Convert.ToBase64String(Array.Empty<byte>());
+
+        await Assert.ThrowsAsync<OrionVaultConfigurationException>(
+            () => AwsKmsKeyProvider.CreateAsync(kms.Object, opts));
+    }
+
     private static string ReadAsAscii(Stream stream)
     {
         if (stream is MemoryStream ms)

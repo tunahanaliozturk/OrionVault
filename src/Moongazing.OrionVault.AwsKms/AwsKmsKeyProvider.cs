@@ -78,6 +78,11 @@ public sealed class AwsKmsKeyProvider : IKeyProvider
         var tasks = options.WrappedKeys.Select(async pair =>
         {
             var (id, ciphertextBase64) = pair;
+            if (string.IsNullOrWhiteSpace(ciphertextBase64))
+            {
+                throw new OrionVaultConfigurationException(
+                    $"AwsKmsKeyProvider: key id {id} ciphertext is null or whitespace.");
+            }
             byte[] ciphertext;
             try
             {
@@ -87,6 +92,11 @@ public sealed class AwsKmsKeyProvider : IKeyProvider
             {
                 throw new OrionVaultConfigurationException(
                     $"AwsKmsKeyProvider: key id {id} ciphertext is not valid base64.", ex);
+            }
+            if (ciphertext.Length == 0)
+            {
+                throw new OrionVaultConfigurationException(
+                    $"AwsKmsKeyProvider: key id {id} ciphertext decoded to zero bytes.");
             }
 
             using var stream = new MemoryStream(ciphertext);

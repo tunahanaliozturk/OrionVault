@@ -2,6 +2,7 @@ namespace Moongazing.OrionVault.AwsKms;
 
 using Amazon.KeyManagementService;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using Moongazing.OrionVault.Abstractions;
 
 /// <summary>
@@ -33,8 +34,10 @@ public static class AwsKmsServiceCollectionExtensions
         services.AddSingleton<IKeyProvider>(sp =>
         {
             var kms = sp.GetRequiredService<IAmazonKeyManagementService>();
-            var opts = new AwsKmsKeyProviderOptions { ActiveKeyId = 0 };
-            configure(opts);
+            // Resolve via IOptions so any additional Configure<>/PostConfigure<> registrations
+            // (test overrides, layered config sources, named-options, etc.) are honoured
+            // instead of being silently bypassed.
+            var opts = sp.GetRequiredService<IOptions<AwsKmsKeyProviderOptions>>().Value;
             return AwsKmsKeyProvider.CreateAsync(kms, opts).GetAwaiter().GetResult();
         });
 
