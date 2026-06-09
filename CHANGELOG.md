@@ -4,6 +4,39 @@ All notable changes to OrionVault are recorded here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-06-09
+
+### Added
+
+#### `Moongazing.OrionVault.AwsKms` (NEW PACKAGE) - AWS KMS key provider
+
+Wraps OrionVault's symmetric data keys with an AWS KMS customer master key (CMK) via envelope encryption. The CMK never leaves AWS; OrionVault config / source control holds only the wrapped (KMS-ciphertext) blobs. Decryption runs once at startup against AWS KMS, then plaintext data keys stay in process memory for the provider's lifetime.
+
+- **`AwsKmsKeyProvider`** implements `IKeyProvider`. Supports the standard OrionVault rotation pattern: `ActiveKeyId` is used for new encryptions; previously-active ids stay resolvable so existing rows decrypt during a rotation rollout.
+- **`AwsKmsKeyProviderOptions`** binds `ActiveKeyId` + a `WrappedKeys` map of (`short keyId`, `base64 ciphertext`). At least one entry is required.
+- **`AwsKmsKeyProvider.CreateAsync(IAmazonKeyManagementService, options, ct)`** async factory decrypts each configured ciphertext blob in parallel and returns a ready-to-use provider. Throws `OrionVaultConfigurationException` for empty options, invalid base64, missing-active-id, or wrong-length keys (must be exactly 32 bytes).
+- **`AddOrionVaultAwsKms(this IServiceCollection, configure)`** DI helper registers the provider as a singleton. Consumers register the KMS client themselves via `services.AddAWSService<IAmazonKeyManagementService>()` so the credentials story stays in the consumer's hands.
+
+### Deferred
+
+- **LocalStack integration tests** for the KMS provider -> v0.2.4 (alongside Azure Key Vault).
+- Azure Key Vault provider -> v0.2.4 (unchanged)
+- Multi-DbContext support -> v0.2.5 (unchanged)
+
+### Migration from v0.2.2
+
+Source-compatible. Add-on is opt-in:
+
+```csharp
+services.AddAWSService<IAmazonKeyManagementService>();
+services.AddOrionVaultAwsKms(o =>
+{
+    o.ActiveKeyId = 1;
+    o.WrappedKeys[1] = "BASE64-KMS-CIPHERTEXT-FOR-KEY-1";
+});
+services.AddOrionVault(...);
+```
+
 ## [0.2.2] - 2026-06-09
 
 ### Added
