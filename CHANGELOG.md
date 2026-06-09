@@ -4,6 +4,29 @@ All notable changes to OrionVault are recorded here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-06-09
+
+### Added
+
+#### `EncryptionAssertions.IsNotEncrypted` (encryptor-backed)
+
+The proper version of the helper that was dropped from v0.2.1 because the length-only heuristic produced false positives on long plaintext columns. Now takes the consumer's registered `IEncryptor` and attempts a real decrypt; success means the bytes ARE encrypted under a registered key and the assertion fires.
+
+- **`IsNotEncrypted(byte[], IEncryptor)`** - short-circuits on bytes shorter than `CipherFormat.MinimumCiphertextLength` (definitively plaintext), otherwise attempts `encryptor.DecryptBytes` and asserts it fails. AES-GCM tag mismatch, unknown key id, malformed header - all surface as "not encrypted".
+- Pairs with the v0.2.0 background re-encryption service: regression tests can now confirm that columns are truly plaintext after `[Encrypted]` is removed, not just length-different.
+
+### Deferred
+
+- AWS KMS provider -> v0.2.3 (was v0.2.2; renamed because the testing helper takes that slot)
+- Azure Key Vault provider -> v0.2.4 (was v0.2.3)
+- First-class multi-DbContext support -> v0.2.5 (was v0.2.4)
+
+`ROADMAP.md` reflects the new sequence.
+
+### Migration from v0.2.1
+
+Source-compatible. `IsNotEncrypted` is a new additive overload; existing assertion code is unchanged.
+
 ## [0.2.1] - 2026-06-04
 
 ### Added
