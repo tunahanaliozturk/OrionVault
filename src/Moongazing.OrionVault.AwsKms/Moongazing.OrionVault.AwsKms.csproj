@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFrameworks>net8.0;net9.0;net10.0</TargetFrameworks>
+    <IsPackable>true</IsPackable>
+    <PackageId>OrionVault.AwsKms</PackageId>
+    <Description>AWS KMS key provider for OrionVault. Wraps OrionVault's symmetric data keys with an AWS KMS customer master key (CMK) via envelope encryption. The CMK itself never leaves AWS; the per-key data keys are decrypted at host startup and cached in process memory for the provider lifetime. Implements the standard IKeyProvider contract.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="AWSSDK.KeyManagementService" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Moongazing.OrionVault\Moongazing.OrionVault.csproj" />
+  </ItemGroup>
+</Project>
