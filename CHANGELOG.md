@@ -4,6 +4,44 @@ All notable changes to OrionVault are recorded here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-06-10
+
+### Added
+
+#### `Moongazing.OrionVault.AzureKeyVault` (NEW PACKAGE) - Azure Key Vault key provider
+
+Wraps OrionVault's symmetric data keys with an Azure Key Vault KEK (RSA-OAEP-256 by default, AES-KW for HSM-backed AES keys). The KEK never leaves Azure Key Vault; OrionVault config / source control holds only the wrapped (KEK-ciphertext) blobs. Unwrap runs once at startup against Azure Key Vault, then plaintext data keys stay in process memory for the provider's lifetime.
+
+- **`AzureKeyVaultKeyProvider`** implements `IKeyProvider`. Multi-key read, single-key write rotation (same shape as `AwsKmsKeyProvider`): `ActiveKeyId` is used for new encryptions; previously-active ids stay resolvable so existing rows decrypt during a rotation rollout.
+- **`AzureKeyVaultKeyProviderOptions`** binds `KeyName` (vault key name or full key identifier), optional `KeyVersion` (defaults to current), `WrapAlgorithm` (default `RsaOaep256`), `ActiveKeyId`, and a `WrappedKeys` map of (`short keyId`, `base64 ciphertext`). At least one entry is required.
+- **`AzureKeyVaultKeyProvider.CreateAsync(IKeyVaultUnwrapClient, options, ct)`** async factory unwraps each configured ciphertext blob in parallel and returns a ready-to-use provider. Local input validation: null/whitespace ciphertext, non-base64, zero-byte decoded ciphertext, blank `KeyName`, missing active id, wrong-length plaintext all surface as `OrionVaultConfigurationException` at startup.
+- **`IKeyVaultUnwrapClient`** narrow abstraction so the provider can be unit-tested without spinning up a real `CryptographyClient`; the production DI adapter forwards to `CryptographyClient.UnwrapKeyAsync(algorithm, ...)`.
+- **`AddOrionVaultAzureKeyVault(this IServiceCollection, configure)`** DI helper registers the provider as singleton. Consumers register the `KeyClient` themselves (e.g., `services.AddSingleton(new KeyClient(new Uri(...), new DefaultAzureCredential()))`) so the credentials story stays in the consumer's hands.
+
+### Deferred
+
+- **LocalStack integration tests for AWS KMS provider** -> v0.2.5 (kept on the roadmap; bundled with Azure Key Vault integration tests when CI gains the broker matrix)
+- **Multi-DbContext support** -> v0.2.6 (bumped one minor to make room for the integration-test slot)
+
+### Migration from v0.2.3
+
+Source-compatible. Add-on is opt-in:
+
+```csharp
+services.AddSingleton(new KeyClient(
+    new Uri("https://my-vault.vault.azure.net/"),
+    new DefaultAzureCredential()));
+
+services.AddOrionVaultAzureKeyVault(o =>
+{
+    o.KeyName = "orionvault-kek";
+    o.ActiveKeyId = 1;
+    o.WrappedKeys[1] = "BASE64-AZURE-WRAPPED-DATA-KEY-1";
+});
+
+services.AddOrionVault(...);
+```
+
 ## [0.2.3] - 2026-06-09
 
 ### Added
