@@ -4,6 +4,27 @@ All notable changes to OrionVault are recorded here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.2.9] - 2026-06-11
+
+### Added
+
+#### `KeyedOrionVaultModelCustomizer<TDbContext>` - per-DbContext binding wiring
+
+Delivers the EF Core wiring deferred from v0.2.8.
+
+- `KeyedOrionVaultBinding<TDbContext>(providerName)` per-DbContext binding object.
+- `KeyedOrionVaultModelCustomizer<TDbContext>` model customizer with parameterless ctor for `ReplaceService<IModelCustomizer, ...>`.
+- Resolves the application SP via `CoreOptionsExtension.ApplicationServiceProvider`; reads binding + keyed `IEncryptionConfigurator` from it.
+- Throws `InvalidOperationException` with a clear message when the binding is missing or `UseApplicationServiceProvider` was not called.
+
+### Tests
+
+3 new facts.
+
+### Migration from v0.2.8
+
+Source-compatible.
+
 ## [0.2.8] - 2026-06-10
 
 ### Added
