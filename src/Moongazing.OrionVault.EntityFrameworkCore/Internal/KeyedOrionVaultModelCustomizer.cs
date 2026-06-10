@@ -40,13 +40,13 @@ using Moongazing.OrionVault.Abstractions;
 public sealed class KeyedOrionVaultModelCustomizer<TDbContext> : IModelCustomizer
     where TDbContext : DbContext
 {
-    private readonly ModelCustomizer inner;
-
 #pragma warning disable EF1001 // ModelCustomizerDependencies is an internal EF Core API but the parameterless ctor is the documented pattern
+    private readonly ModelCustomizerDependencies dependencies;
+
     /// <summary>Parameterless ctor required for EF Core's ReplaceService construction.</summary>
     public KeyedOrionVaultModelCustomizer()
     {
-        inner = new ModelCustomizer(new ModelCustomizerDependencies());
+        dependencies = new ModelCustomizerDependencies();
     }
 #pragma warning restore EF1001
 
@@ -56,8 +56,18 @@ public sealed class KeyedOrionVaultModelCustomizer<TDbContext> : IModelCustomize
         ArgumentNullException.ThrowIfNull(modelBuilder);
         ArgumentNullException.ThrowIfNull(context);
 
-        // Run the default EF Core model customization first so the keyed configurator
-        // attaches on top of the default behaviour rather than replacing it.
+        // Provider-aware default customization: ReplaceService<IModelCustomizer, ...>
+        // swaps the provider's own customizer for ours, so a fresh plain ModelCustomizer
+        // here would lose provider-specific behaviours (SQL Server temporal tables,
+        // Cosmos document hints, etc.). Discover the original customizer registered on
+        // the internal SP via the dependencies' service provider snapshot and delegate
+        // to it - that preserves the provider chain.
+#pragma warning disable EF1001
+        var inner = context.GetInfrastructure()
+            .GetServices<IModelCustomizer>()
+            .FirstOrDefault(c => c is not KeyedOrionVaultModelCustomizer<TDbContext>)
+            ?? new ModelCustomizer(dependencies);
+#pragma warning restore EF1001
         inner.Customize(modelBuilder, context);
 
         // The application SP attached via UseApplicationServiceProvider lives on
