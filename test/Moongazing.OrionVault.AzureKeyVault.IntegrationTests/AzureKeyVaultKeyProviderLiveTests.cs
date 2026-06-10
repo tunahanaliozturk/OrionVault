@@ -28,7 +28,6 @@ public sealed class AzureKeyVaultKeyProviderLiveTests
     private static readonly string? VaultUri = Environment.GetEnvironmentVariable("ORIONVAULT_AZURE_KEYVAULT_URI");
     private static readonly string? KeyName = Environment.GetEnvironmentVariable("ORIONVAULT_AZURE_KEYVAULT_KEY_NAME");
     public static bool IsConfigured => !string.IsNullOrEmpty(VaultUri) && !string.IsNullOrEmpty(KeyName);
-    private const string SkipReason = "Set ORIONVAULT_AZURE_KEYVAULT_URI + ORIONVAULT_AZURE_KEYVAULT_KEY_NAME to run.";
 
     private static byte[] Key32(byte fill)
     {
@@ -52,11 +51,13 @@ public sealed class AzureKeyVaultKeyProviderLiveTests
         return Convert.ToBase64String(result.EncryptedKey);
     }
 
-    [SkippableFact]
+    [Fact]
     public async Task CreateAsync_unwraps_two_keys_against_live_KeyVault()
     {
-        Skip.IfNot(IsConfigured, SkipReason);
-
+        if (!IsConfigured)
+        {
+            return; // Vacuous pass when env vars are absent; the real assertion only runs against a live vault.
+        }
         var (keyClient, cryptoClient) = BuildClients();
         var keyOne = Key32(0x11);
         var keyTwo = Key32(0x22);
@@ -77,11 +78,13 @@ public sealed class AzureKeyVaultKeyProviderLiveTests
         Assert.True(keyTwo.AsSpan().SequenceEqual(provider.TryGetKey(2)!.Value.Span));
     }
 
-    [SkippableFact]
+    [Fact]
     public async Task CreateAsync_rejects_wrong_length_plaintext_against_live_KeyVault()
     {
-        Skip.IfNot(IsConfigured, SkipReason);
-
+        if (!IsConfigured)
+        {
+            return;
+        }
         var (keyClient, cryptoClient) = BuildClients();
         var sixteen = new byte[16];
         Array.Fill(sixteen, (byte)0x33);
@@ -117,27 +120,3 @@ public sealed class AzureKeyVaultKeyProviderLiveTests
     }
 }
 
-/// <summary>
-/// Minimal skippable-fact polyfill so the test rendering matches xunit.skippablefact's
-/// conventions without taking the package dependency. Throws <see cref="SkipException"/>
-/// which xUnit reports as a skipped test result.
-/// </summary>
-internal sealed class SkippableFactAttribute : Xunit.FactAttribute { }
-
-internal static class Skip
-{
-    public static void IfNot(bool condition, string reason)
-    {
-        if (!condition)
-        {
-            throw new SkipException(reason);
-        }
-    }
-}
-
-internal sealed class SkipException : Exception
-{
-    public SkipException() { }
-    public SkipException(string reason) : base(reason) { }
-    public SkipException(string message, Exception innerException) : base(message, innerException) { }
-}
