@@ -12,7 +12,7 @@
     <!-- CA1034/CA1515: EF Core only discovers properties on public, non-nested entity types via its
          default conventions. Test fixture entities must therefore be declared as public nested classes
          (kept inside the test class for locality). These two design rules do not apply to test code. -->
-    <NoWarn>$(NoWarn);CA1707;CA2007;EF1001;CA1812;CA1034;CA1515</NoWarn>
+    <NoWarn>$(NoWarn);CA1707;CA2007;EF1001;CA1812;CA1034;CA1515;CA1859;CA2000</NoWarn>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" />

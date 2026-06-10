@@ -39,6 +39,45 @@ public static class OrionVaultEntityFrameworkCoreBuilderExtensions
     }
 
     /// <summary>
+    /// v0.2.8 per-DbContext binding overload. Registers a SEPARATE
+    /// <see cref="EncryptedValueConverterFactory"/> and <see cref="IEncryptionConfigurator"/>
+    /// keyed under <paramref name="providerName"/>, bound to the named
+    /// <see cref="IKeyProvider"/> in <see cref="Abstractions.IKeyedKeyProviderRegistry"/>.
+    /// Pair with <see cref="UseOrionVault(DbContextOptionsBuilder, IServiceProvider, string)"/>
+    /// on the matching <see cref="DbContextOptionsBuilder"/> so the DbContext resolves the
+    /// keyed configurator instead of the global one.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The registry MUST be populated via
+    /// <see cref="DependencyInjection.OrionVaultNamedKeyProviderExtensions.AddNamedKeyProvider(OrionVaultBuilder, string, IKeyProvider)"/>
+    /// before the DbContext is resolved; the configurator factory walks the registry on
+    /// first resolve to build its <see cref="IEncryptor"/>.
+    /// </para>
+    /// </remarks>
+    public static OrionVaultBuilder UseEntityFrameworkCore<TDbContext>(
+        this OrionVaultBuilder builder, string providerName)
+        where TDbContext : DbContext
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        ArgumentException.ThrowIfNullOrEmpty(providerName);
+
+        builder.Services.AddKeyedSingleton<IEncryptor>(providerName, (sp, key) =>
+        {
+            var registry = sp.GetRequiredService<IKeyedKeyProviderRegistry>();
+            var provider = registry.GetProvider((string)key!);
+            var diag = sp.GetRequiredService<Moongazing.OrionVault.Diagnostics.OrionVaultDiagnostics>();
+            return OrionVaultEncryptor.Create(provider, diag);
+        });
+        builder.Services.AddKeyedSingleton<EncryptedValueConverterFactory>(providerName, (sp, key) =>
+            new EncryptedValueConverterFactory(sp.GetRequiredKeyedService<IEncryptor>(key)));
+        builder.Services.AddKeyedSingleton<IEncryptionConfigurator>(providerName, (sp, key) =>
+            new EncryptionConfigurator(sp.GetRequiredKeyedService<EncryptedValueConverterFactory>(key)));
+
+        return builder;
+    }
+
+    /// <summary>
     /// Attach OrionVault's model customizer to a <see cref="DbContextOptionsBuilder"/>.
     /// Call this inside the <c>(sp, opt) =&gt; ...</c> overload of <c>AddDbContext</c>.
     /// Safe to call once per DbContext type; the customizer replacement is per-
