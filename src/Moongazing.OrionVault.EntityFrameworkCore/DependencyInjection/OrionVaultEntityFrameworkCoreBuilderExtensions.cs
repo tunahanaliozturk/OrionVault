@@ -39,13 +39,18 @@ public static class OrionVaultEntityFrameworkCoreBuilderExtensions
     }
 
     /// <summary>
-    /// v0.2.8 per-DbContext binding overload. Registers a SEPARATE
+    /// v0.2.8 per-DbContext binding overload. Registers SEPARATE
     /// <see cref="EncryptedValueConverterFactory"/> and <see cref="IEncryptionConfigurator"/>
     /// keyed under <paramref name="providerName"/>, bound to the named
     /// <see cref="IKeyProvider"/> in <see cref="Abstractions.IKeyedKeyProviderRegistry"/>.
-    /// Pair with <see cref="UseOrionVault(DbContextOptionsBuilder, IServiceProvider, string)"/>
-    /// on the matching <see cref="DbContextOptionsBuilder"/> so the DbContext resolves the
-    /// keyed configurator instead of the global one.
+    /// The drop-in EF Core wiring (a <c>UseOrionVault(builder, sp, providerName)</c>
+    /// overload that auto-attaches the keyed configurator to a DbContext options pipeline)
+    /// is deferred to v0.3.0 - EF Core's <c>ReplaceService</c> does not expose a factory
+    /// overload that can capture a keyed dependency at registration time, so v0.3.0 will
+    /// use a different mechanism. Until then consumers resolve
+    /// <see cref="IEncryptionConfigurator"/> via
+    /// <c>sp.GetRequiredKeyedService&lt;IEncryptionConfigurator&gt;(providerName)</c> and
+    /// apply it from a custom model customizer.
     /// </summary>
     /// <remarks>
     /// <para>
