@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFrameworks>net8.0;net9.0;net10.0</TargetFrameworks>
+    <IsPackable>true</IsPackable>
+    <PackageId>OrionVault.AzureKeyVault</PackageId>
+    <Description>Azure Key Vault key provider for OrionVault. Wraps OrionVault's symmetric data keys with an Azure Key Vault KEK (RSA or AES-KW), keeping the master key inside the vault. Data keys are unwrapped once at host startup and cached in process memory for the provider lifetime.</Description>
+    <PackageTags>encryption;azure;key-vault;envelope-encryption;orionvault</PackageTags>
+    <PackageReadmeFile>docs/README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Azure.Security.KeyVault.Keys" />
+    <PackageReference Include="Azure.Identity" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="docs/" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Moongazing.OrionVault\Moongazing.OrionVault.csproj" />
+  </ItemGroup>
+</Project>
