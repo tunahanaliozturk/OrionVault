@@ -4,6 +4,31 @@ All notable changes to OrionVault are recorded here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.2.7] - 2026-06-10
+
+### Added
+
+#### `IKeyedKeyProviderRegistry` - named-provider scaffolding
+
+Foundation for v0.3.0's per-DbContext provider binding. v0.2.7 ships the data structure + DI plumbing so consumers populate the registry today; the v0.3 EF Core overload will resolve named providers without further breaking changes.
+
+- **`IKeyedKeyProviderRegistry`** interface in `Moongazing.OrionVault.Abstractions`: `GetProvider(name)`, `TryGetProvider(name, out)`, `IsRegistered(name)`, `RegisteredNames()`.
+- **`KeyedKeyProviderRegistry`** default implementation backed by `ConcurrentDictionary` with a side-list preserving registration order. Idempotent `Register(name, provider)` - first call wins, subsequent calls return `false`.
+- **`OrionVaultBuilder.AddNamedKeyProvider(name, IKeyProvider)`** and **`AddNamedKeyProvider(name, Func<IServiceProvider, IKeyProvider>)`** DI extensions. Factory overload runs against the resolved `IServiceProvider` so named providers can take construction dependencies from DI.
+- The existing default `IKeyProvider` registration continues to work unchanged. The registry is opt-in.
+
+### Tests
+
+12 new facts; 41 total in core suite.
+
+### Deferred
+
+- Per-DbContext provider binding (`UseEntityFrameworkCore<TDbContext>("primary")`) -> v0.3.0.
+
+### Migration from v0.2.6
+
+Source-compatible.
+
 ## [0.2.6] - 2026-06-10
 
 ### Added
