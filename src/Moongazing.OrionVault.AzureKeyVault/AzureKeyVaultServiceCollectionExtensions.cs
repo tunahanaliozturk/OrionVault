@@ -1,3 +1,4 @@
+using Azure.Core;
 using Azure.Security.KeyVault.Keys;
 using Azure.Security.KeyVault.Keys.Cryptography;
 using Microsoft.Extensions.DependencyInjection;
@@ -34,16 +35,33 @@ public static class AzureKeyVaultServiceCollectionExtensions
 
         services.AddSingleton<IKeyProvider>(sp =>
         {
-            var keyClient = sp.GetRequiredService<KeyClient>();
             var opts = sp.GetRequiredService<IOptions<AzureKeyVaultKeyProviderOptions>>().Value;
-            var cryptoClient = string.IsNullOrEmpty(opts.KeyVersion)
-                ? keyClient.GetCryptographyClient(opts.KeyName)
-                : keyClient.GetCryptographyClient(opts.KeyName, opts.KeyVersion);
+            var cryptoClient = ResolveCryptographyClient(sp, opts);
             var unwrapClient = new CryptographyClientUnwrapAdapter(cryptoClient, opts.WrapAlgorithm);
             return AzureKeyVaultKeyProvider.CreateAsync(unwrapClient, opts).GetAwaiter().GetResult();
         });
 
         return services;
+    }
+
+    // KeyName accepts EITHER a bare key name (resolved via the registered KeyClient's vault
+    // URI) OR a full Key Vault key identifier ("https://<vault>.vault.azure.net/keys/<name>"
+    // optionally suffixed with "/<version>"). The bare-name path goes through KeyClient so
+    // the consumer's TokenCredential and pipeline configuration apply. The URI path builds
+    // a CryptographyClient directly so the vault URI in KeyName is honoured even when it
+    // differs from the registered KeyClient's vault (cross-vault unwrap scenarios).
+    private static CryptographyClient ResolveCryptographyClient(
+        IServiceProvider sp, AzureKeyVaultKeyProviderOptions opts)
+    {
+        if (Uri.TryCreate(opts.KeyName, UriKind.Absolute, out var keyIdentifier))
+        {
+            var credential = sp.GetRequiredService<TokenCredential>();
+            return new CryptographyClient(keyIdentifier, credential);
+        }
+        var keyClient = sp.GetRequiredService<KeyClient>();
+        return string.IsNullOrEmpty(opts.KeyVersion)
+            ? keyClient.GetCryptographyClient(opts.KeyName)
+            : keyClient.GetCryptographyClient(opts.KeyName, opts.KeyVersion);
     }
 
     private sealed class CryptographyClientUnwrapAdapter : IKeyVaultUnwrapClient
