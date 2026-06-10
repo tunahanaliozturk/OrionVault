@@ -20,9 +20,9 @@ OrionVault follows the same release rhythm as the rest of the Orion family: quar
 
 The original v0.2 milestone listed four items. Three move to focused follow-up patches:
 
-- **AWS KMS provider** (`Moongazing.OrionVault.AwsKms`) -> v0.2.1
-- **Azure Key Vault provider** (`Moongazing.OrionVault.AzureKeyVault`) -> v0.2.2
-- **First-class multi-DbContext support** -> v0.2.3
+- **AWS KMS provider** (`Moongazing.OrionVault.AwsKms`) -> v0.2.3 (shipped 2026-06-09)
+- **Azure Key Vault provider** (`Moongazing.OrionVault.AzureKeyVault`) -> v0.2.4 (shipped 2026-06-10: RSA-OAEP-256 default + AES-KW option, mocked-vault unit tests). LocalStack + Azure integration tests bundled into v0.2.5.
+- **First-class multi-DbContext support** -> v0.2.6 (bumped one minor to make room for the integration-test slot at v0.2.5)
 
 ## v0.3 - 2027-Q1
 
