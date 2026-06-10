@@ -4,6 +4,30 @@ All notable changes to OrionVault are recorded here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.2.10] - 2026-06-11
+
+### Added
+
+#### `AddOrionVaultBoundDbContext<TDbContext>` - one-call per-DbContext binding
+
+One-call wiring of the v0.2.7-v0.2.9 per-DbContext binding stack. v0.2.9 required three discrete calls (`UseEntityFrameworkCore<T>(name)`, `AddSingleton(new KeyedOrionVaultBinding<T>(name))`, and `AddDbContext` with `UseApplicationServiceProvider` + `ReplaceService<IModelCustomizer, ...>`) - easy to forget one. v0.2.10 collapses them into a single builder method.
+
+```csharp
+services.AddOrionVault(...)
+    .AddNamedKeyProvider("primary", primaryProvider)
+    .AddOrionVaultBoundDbContext<PrimaryDb>("primary", (sp, opt) => opt.UseSqlServer(connectionString));
+```
+
+Under the hood the helper invokes the v0.2.8 keyed registration, the v0.2.9 binding, and `AddDbContext` with the correct `UseApplicationServiceProvider` + `ReplaceService` calls.
+
+### Tests
+
+3 new facts.
+
+### Migration from v0.2.9
+
+Source-compatible.
+
 ## [0.2.9] - 2026-06-11
 
 ### Added
