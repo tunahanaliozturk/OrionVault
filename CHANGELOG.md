@@ -4,6 +4,44 @@ All notable changes to OrionVault are recorded here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.2.8] - 2026-06-10
+
+### Added
+
+#### Keyed `IEncryptor` / `EncryptedValueConverterFactory` / `IEncryptionConfigurator` per provider name
+
+Builds on the v0.2.7 `IKeyedKeyProviderRegistry` scaffolding. v0.2.8 ships the keyed DI registrations so the host can resolve a separate encryptor per provider name; the v0.3.0 milestone will add the EF Core model-customizer wiring that makes these resolutions kick in automatically per DbContext.
+
+- **`OrionVaultEncryptor.Create(IKeyProvider, OrionVaultDiagnostics) -> IEncryptor`** public factory entry point. Builds an `AesGcmEncryptor` over the supplied key provider without exposing the internal type. Pass the shared `OrionVaultDiagnostics` from DI so the keyed encryptor's telemetry lands on the same activity / counter stream as the default one.
+- **`OrionVaultBuilder.UseEntityFrameworkCore<TDbContext>(string providerName)`** registers keyed singletons under `providerName`:
+  - `IEncryptor` -> built via `OrionVaultEncryptor.Create` over `IKeyedKeyProviderRegistry.GetProvider(providerName)`.
+  - `EncryptedValueConverterFactory` -> bound to the keyed encryptor.
+  - `IEncryptionConfigurator` -> bound to the keyed factory.
+- Resolve from the host via `sp.GetRequiredKeyedService<IEncryptor>("primary")`.
+
+### Tests
+
+6 new facts cover: keyed `IEncryptor` registered per name (distinct instances), keyed `EncryptedValueConverterFactory` distinct per name, keyed `IEncryptionConfigurator` distinct per name, keyed encryptor encrypts with the named provider's key set (cross-decrypt fails as expected), keyed overload rejects null / empty `providerName`, `OrionVaultEncryptor.Create` round-trips.
+
+### Deferred
+
+- Drop-in EF Core wiring so a DbContext options pipeline can say `opt.UseOrionVault(sp, "primary")` -> v0.3.0 (EF Core `ReplaceService` factory overload constraints).
+
+### Migration from v0.2.7
+
+Source-compatible. The keyed overload is opt-in; existing single-encryptor consumers continue unchanged.
+
+```csharp
+services.AddOrionVault(o => { o.UseStaticKeys(...); o.ActiveKeyId = 1; })
+    .AddNamedKeyProvider("primary", primaryProvider)
+    .AddNamedKeyProvider("audit", auditProvider)
+    .UseEntityFrameworkCore<PrimaryDbContext>("primary")
+    .UseEntityFrameworkCore<AuditDbContext>("audit");
+
+// resolve per-context:
+var primaryEncryptor = sp.GetRequiredKeyedService<IEncryptor>("primary");
+```
+
 ## [0.2.7] - 2026-06-10
 
 ### Added
