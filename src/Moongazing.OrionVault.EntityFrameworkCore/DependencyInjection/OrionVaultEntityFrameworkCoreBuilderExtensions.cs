@@ -121,6 +121,46 @@ public static class OrionVaultEntityFrameworkCoreBuilderExtensions
     /// </param>
     /// <param name="contextLifetime">DbContext lifetime; default scoped.</param>
     /// <param name="optionsLifetime">DbContextOptions lifetime; default scoped.</param>
+    /// <summary>
+    /// v0.2.10 one-call wiring of the v0.2.7-v0.2.9 per-DbContext binding stack.
+    /// Equivalent to:
+    /// <list type="number">
+    ///   <item><description><c>builder.UseEntityFrameworkCore&lt;TDbContext&gt;(providerName)</c> - keyed encryptor + configurator under <paramref name="providerName"/>.</description></item>
+    ///   <item><description><c>services.AddSingleton(new KeyedOrionVaultBinding&lt;TDbContext&gt;(providerName))</c> - the v0.2.9 binding.</description></item>
+    ///   <item><description><c>services.AddDbContext&lt;TDbContext&gt;((sp, opt) =&gt; { configureContext(sp, opt); opt.UseApplicationServiceProvider(sp); opt.ReplaceService&lt;IModelCustomizer, KeyedOrionVaultModelCustomizer&lt;TDbContext&gt;&gt;(); })</c>.</description></item>
+    /// </list>
+    /// Use this when you have one (or several) DbContexts each bound to a distinct named
+    /// provider; it removes the boilerplate of remembering to call
+    /// <c>UseApplicationServiceProvider</c> and to wire the keyed model customizer.
+    /// </summary>
+    public static OrionVaultBuilder AddOrionVaultBoundDbContext<TDbContext>(
+        this OrionVaultBuilder builder,
+        string providerName,
+        Action<IServiceProvider, DbContextOptionsBuilder> configureContext,
+        ServiceLifetime contextLifetime = ServiceLifetime.Scoped,
+        ServiceLifetime optionsLifetime = ServiceLifetime.Scoped)
+        where TDbContext : DbContext
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        ArgumentException.ThrowIfNullOrEmpty(providerName);
+        ArgumentNullException.ThrowIfNull(configureContext);
+
+        builder.UseEntityFrameworkCore<TDbContext>(providerName);
+        builder.Services.AddSingleton(new KeyedOrionVaultBinding<TDbContext>(providerName));
+        builder.Services.AddDbContext<TDbContext>(
+            (sp, opt) =>
+            {
+                configureContext(sp, opt);
+                opt.UseApplicationServiceProvider(sp);
+                opt.ReplaceService<Microsoft.EntityFrameworkCore.Infrastructure.IModelCustomizer,
+                    KeyedOrionVaultModelCustomizer<TDbContext>>();
+            },
+            contextLifetime,
+            optionsLifetime);
+
+        return builder;
+    }
+
     public static IServiceCollection AddOrionVaultDbContext<TDbContext>(
         this IServiceCollection services,
         Action<IServiceProvider, DbContextOptionsBuilder> configureContext,
