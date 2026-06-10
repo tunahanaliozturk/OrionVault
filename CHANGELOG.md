@@ -4,6 +4,46 @@ All notable changes to OrionVault are recorded here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.2.6] - 2026-06-10
+
+### Added
+
+#### Multi-DbContext support
+
+The pre-v0.2.6 docstring warned that calling `UseEntityFrameworkCore<TDbContext>()` twice was unsafe; in practice the registered services already used `TryAddSingleton` so the second call would short-circuit instead of overwriting, but the contract was undocumented. v0.2.6 confirms the contract and adds the ergonomics consumers were writing by hand.
+
+- **`UseEntityFrameworkCore<TDbContext>()` is now explicitly documented as idempotent** across multiple DbContext types. All registered DbContexts share ONE `IEncryptor` + key set (the common case: primary + audit DBs encrypted with the same KMS-wrapped data keys). Distinct key providers per DbContext stay a v0.3 milestone.
+- **`AddOrionVaultDbContext<TDbContext>(this IServiceCollection, configureContext, contextLifetime?, optionsLifetime?)`** combined-registration shortcut: registers the OrionVault EF Core wiring AND wires `UseOrionVault` INSIDE an `AddDbContext<TDbContext>` call, so single-line wiring fits in the consumer's `Program.cs`. Lifetime parameters mirror the EF Core defaults (scoped). The wrapper invokes the consumer callback FIRST so provider selection (`UseSqlServer` / `UseNpgsql` / etc.) is applied before OrionVault attaches on top.
+
+### Tests
+
+4 new `MultiDbContextTests` facts: two DbContext types sharing one encryptor (end-to-end SQLite round-trip), stored ciphertext differs across two DbContext writes due to per-call AES-GCM nonce, `AddOrionVaultDbContext` shortcut wires `UseOrionVault` correctly, null-callback rejection. 15 facts total in the EF Core integration suite.
+
+### Migration from v0.2.5
+
+Source-compatible. Existing single-DbContext wiring keeps working. For two DbContexts sharing one encryptor:
+
+```csharp
+services.AddOrionVault(o =>
+    {
+        o.UseStaticKeys(k => k.Add(1, "BASE64-KEY"));
+        o.ActiveKeyId = 1;
+    })
+    .UseEntityFrameworkCore<PrimaryDbContext>()
+    .UseEntityFrameworkCore<AuditDbContext>()
+    .Services
+    .AddDbContext<PrimaryDbContext>((sp, o) => o.UseSqlServer(...).UseOrionVault(sp))
+    .AddDbContext<AuditDbContext>((sp, o) => o.UseSqlServer(...).UseOrionVault(sp));
+```
+
+Or with the single-line shortcut:
+
+```csharp
+services.AddOrionVault(o => { ... }).Services
+    .AddOrionVaultDbContext<PrimaryDbContext>((sp, o) => o.UseSqlServer(...))
+    .AddOrionVaultDbContext<AuditDbContext>((sp, o) => o.UseSqlServer(...));
+```
+
 ## [0.2.5] - 2026-06-10
 
 ### Added

@@ -11,13 +11,19 @@ using Moongazing.OrionVault.EntityFrameworkCore.Internal;
 public static class OrionVaultEntityFrameworkCoreBuilderExtensions
 {
     /// <summary>
-    /// Register OrionVault's EF Core integration bound to <typeparamref name="TDbContext"/>.
+    /// Register OrionVault's EF Core integration. From v0.2.6 onward this call is
+    /// idempotent across multiple <typeparamref name="TDbContext"/> types: the registered
+    /// services use <see cref="ServiceCollectionDescriptorExtensions.TryAddSingleton{TService, TImplementation}(IServiceCollection)"/>
+    /// shapes so additional <c>UseEntityFrameworkCore&lt;OtherDbContext&gt;()</c> calls
+    /// share the same <see cref="IEncryptor"/> + <see cref="IEncryptionConfigurator"/>
+    /// singletons without overwriting them.
     /// </summary>
     /// <remarks>
-    /// v0.1.0 supports exactly one OrionVault-bound DbContext per host. Calling
-    /// this method twice registers duplicate factories; the second wins and the
-    /// first DbContext's encrypted columns become misconfigured. First-class
-    /// multi-DbContext support is on the v0.2 roadmap.
+    /// All registered DbContexts share ONE <see cref="IEncryptor"/> and therefore ONE
+    /// key-set. This is the common case (primary write DB + audit DB encrypted with the
+    /// same KMS-wrapped data keys). Tenants requiring distinct key providers per DbContext
+    /// must register OrionVault as a separate keyed service - that contract is targeted
+    /// for the v0.3 milestone.
     /// </remarks>
     public static OrionVaultBuilder UseEntityFrameworkCore<TDbContext>(this OrionVaultBuilder builder)
         where TDbContext : DbContext
@@ -35,6 +41,9 @@ public static class OrionVaultEntityFrameworkCoreBuilderExtensions
     /// <summary>
     /// Attach OrionVault's model customizer to a <see cref="DbContextOptionsBuilder"/>.
     /// Call this inside the <c>(sp, opt) =&gt; ...</c> overload of <c>AddDbContext</c>.
+    /// Safe to call once per DbContext type; the customizer replacement is per-
+    /// <see cref="DbContextOptionsBuilder"/> so two DbContexts wired this way do not
+    /// interfere with each other.
     /// </summary>
     public static DbContextOptionsBuilder UseOrionVault(
         this DbContextOptionsBuilder builder,
@@ -50,5 +59,47 @@ public static class OrionVaultEntityFrameworkCoreBuilderExtensions
         builder.UseApplicationServiceProvider(serviceProvider);
         builder.ReplaceService<IModelCustomizer, OrionVaultModelCustomizer>();
         return builder;
+    }
+
+    /// <summary>
+    /// Combined registration shortcut: registers OrionVault's EF Core integration for
+    /// <typeparamref name="TDbContext"/> AND wires <see cref="UseOrionVault"/> inside an
+    /// <see cref="EntityFrameworkServiceCollectionExtensions.AddDbContext{TContext}(IServiceCollection, Action{IServiceProvider, DbContextOptionsBuilder}, ServiceLifetime, ServiceLifetime)"/>
+    /// call. Equivalent to writing both halves manually; provided so common single-call
+    /// wiring fits in one line. Safe to call once per <typeparamref name="TDbContext"/>
+    /// type; calling it for additional DbContext types appends without overwriting.
+    /// </summary>
+    /// <param name="services">The service collection.</param>
+    /// <param name="configureContext">
+    /// EF Core options callback. The wrapper invokes <see cref="UseOrionVault"/> AFTER the
+    /// callback runs so consumer-side provider selection (UseSqlServer / UseNpgsql / etc.)
+    /// is applied first and OrionVault attaches on top.
+    /// </param>
+    /// <param name="contextLifetime">DbContext lifetime; default scoped.</param>
+    /// <param name="optionsLifetime">DbContextOptions lifetime; default scoped.</param>
+    public static IServiceCollection AddOrionVaultDbContext<TDbContext>(
+        this IServiceCollection services,
+        Action<IServiceProvider, DbContextOptionsBuilder> configureContext,
+        ServiceLifetime contextLifetime = ServiceLifetime.Scoped,
+        ServiceLifetime optionsLifetime = ServiceLifetime.Scoped)
+        where TDbContext : DbContext
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(configureContext);
+
+        services.TryAddSingleton<EncryptedValueConverterFactory>(sp =>
+            new EncryptedValueConverterFactory(sp.GetRequiredService<IEncryptor>()));
+        services.TryAddSingleton<IEncryptionConfigurator>(sp =>
+            new EncryptionConfigurator(sp.GetRequiredService<EncryptedValueConverterFactory>()));
+
+        services.AddDbContext<TDbContext>(
+            (sp, opt) =>
+            {
+                configureContext(sp, opt);
+                opt.UseOrionVault(sp);
+            },
+            contextLifetime,
+            optionsLifetime);
+        return services;
     }
 }
