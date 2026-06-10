@@ -41,9 +41,18 @@ public sealed class KeyedKeyProviderRegistry : IKeyedKeyProviderRegistry
         ArgumentException.ThrowIfNullOrEmpty(name);
         if (!entries.TryGetValue(name, out var provider))
         {
+            // Snapshot the registration order under the lock so the formatted error does
+            // not race with a concurrent Register call. Enumerating the mutable list
+            // without the lock could throw InvalidOperationException on the very code
+            // path that is already reporting a configuration error.
+            string[] knownNames;
+            lock (orderLock)
+            {
+                knownNames = registrationOrder.ToArray();
+            }
             throw new KeyNotFoundException(
                 $"KeyedKeyProviderRegistry: no provider registered under name '{name}'. " +
-                $"Registered names: [{string.Join(", ", registrationOrder)}].");
+                $"Registered names: [{string.Join(", ", knownNames)}].");
         }
         return provider;
     }
