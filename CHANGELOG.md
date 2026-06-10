@@ -4,6 +4,29 @@ All notable changes to OrionVault are recorded here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-06-10
+
+### Added
+
+#### Integration test matrix for `AwsKms` and `AzureKeyVault` providers
+
+Lands the deferral chain that goes back to v0.2.3 / v0.2.4 (mocked unit tests shipped, integration tests staged). End-to-end coverage now exists for both envelope-encryption providers.
+
+- **`Moongazing.OrionVault.AwsKms.IntegrationTests`** (NEW PROJECT) - spins up LocalStack (KMS emulator) via Testcontainers, generates a CMK with `CreateKeyAsync`, wraps two 32-byte plaintext keys, and exercises the production `AwsKmsKeyProvider.CreateAsync` path against the real AWS API surface. 3 facts: two-key unwrap + active id resolvable, 8-key parallel decrypt (verifies the `Task.WhenAll` fan-out works against a live broker without deadlocks), 16-byte plaintext rejected as != 32 bytes by the provider's post-unwrap validation. Tagged `[Trait("Category", "Integration")]` so the on-CI matrix can opt them in / out.
+- **`Moongazing.OrionVault.AzureKeyVault.IntegrationTests`** (NEW PROJECT) - live Azure Key Vault provider tests via `DefaultAzureCredential`. Key Vault has no widely-available local emulator (Azurite covers Storage but not Key Vault), so these are CONDITIONAL on the consumer setting `ORIONVAULT_AZURE_KEYVAULT_URI` + `ORIONVAULT_AZURE_KEYVAULT_KEY_NAME`. Skipped via the minimal in-test `SkippableFact` polyfill when the env vars are absent. 2 facts: two-key unwrap against a live RSA wrap key, 16-byte plaintext rejected. Inline `LiveUnwrapAdapter` wraps `CryptographyClient` to satisfy the `IKeyVaultUnwrapClient` contract (the production `CryptographyClientUnwrapAdapter` is internal to the provider package on purpose).
+
+### Tests
+
+Existing 17 unit facts (8 AwsKms + 9 AzureKeyVault) continue to pass; 5 new integration facts (3 LocalStack-backed + 2 live-Azure conditional) bring the OrionVault provider suites to 22 facts when integration matrix is on.
+
+### Deferred
+
+- Multi-DbContext support -> v0.2.6 (unchanged target)
+
+### Migration from v0.2.4
+
+Source-compatible. Integration test projects are not published as NuGet packages and do not affect consumers.
+
 ## [0.2.4] - 2026-06-10
 
 ### Added
