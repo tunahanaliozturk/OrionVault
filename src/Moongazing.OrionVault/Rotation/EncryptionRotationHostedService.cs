@@ -97,7 +97,25 @@ public sealed partial class EncryptionRotationHostedService<THandle> : Backgroun
         sw.Stop();
         diagnostics?.RotationCycleDuration.Record(sw.Elapsed.TotalMilliseconds);
         LogCycle(scanned, rotated, skipped, errors, sw.Elapsed);
-        return new RotationCycleResult(scanned, rotated, skipped, errors);
+        var result = new RotationCycleResult(scanned, rotated, skipped, errors);
+        // v0.2.14 ProgressCallback: invoked AFTER OTel + log so observers see the same
+        // totals. A throwing callback must not abort the rotation sweep - the sweep is
+        // the load-bearing path, the callback is observability.
+        if (options.ProgressCallback is { } cb)
+        {
+            try
+            {
+                cb(result);
+            }
+#pragma warning disable CA1031
+            catch
+#pragma warning restore CA1031
+            {
+                // Callback faults are observed via the existing OrionVaultDiagnostics
+                // counters; they should not bubble up and skip the next cycle.
+            }
+        }
+        return result;
     }
 
     /// <inheritdoc />
@@ -136,6 +154,14 @@ public sealed class EncryptionRotationOptions
 
     /// <summary>Upper bound on rows rotated per cycle. Null = unlimited.</summary>
     public int? MaxRowsPerCycle { get; set; }
+
+    /// <summary>
+    /// v0.2.14 optional per-cycle progress callback. Invoked AFTER OTel emission so
+    /// custom dashboards / log shippers / operator notifiers see the same totals the
+    /// metrics see. Exceptions thrown by the callback are caught and swallowed so a
+    /// faulty notifier does not abort the rotation sweep.
+    /// </summary>
+    public Action<RotationCycleResult>? ProgressCallback { get; set; }
 
     internal void ValidateAndNormalise()
     {
