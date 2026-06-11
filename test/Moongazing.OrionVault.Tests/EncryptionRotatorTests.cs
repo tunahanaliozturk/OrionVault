@@ -34,7 +34,6 @@ public sealed class EncryptionRotatorTests
     public void NeedsRotation_returns_true_when_ciphertext_key_id_differs_from_active()
     {
         var key1 = NewKey();
-        var key2 = NewKey();
 
         // Encrypt under key 1 (active id = 1).
         var encUnder1 = Encryptor(activeKeyId: 1, (1, key1));
