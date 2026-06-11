@@ -25,6 +25,7 @@ public sealed class OrionVaultDiagnostics : IDisposable
     internal Histogram<double> RotationCycleDuration { get; }
     internal Histogram<int> EncryptionPayloadSize { get; }
     internal Histogram<int> DecryptionPayloadSize { get; }
+    internal Histogram<double> KeyResolutionDuration { get; }
 
     // v0.2.15 last-cycle snapshot, fed by EncryptionRotationHostedService at the end of
     // every RunCycleAsync. Operators graph the gauges as a "right-now" view of what the
@@ -89,6 +90,14 @@ public sealed class OrionVaultDiagnostics : IDisposable
         DecryptionPayloadSize = Meter.CreateHistogram<int>(
             "orionvault.decryption.payload_size_bytes", "By",
             "Plaintext size per decrypt operation in bytes.");
+        // v0.2.21 distribution of IKeyProvider.TryGetKey wall-clock per call. Operators
+        // graph p99 to spot a key provider whose backend (Key Vault, KMS, database) has
+        // regressed - the encryption.duration histogram captures the full round-trip
+        // which mixes key lookup + AES work, hiding backend slowdowns inside an
+        // otherwise healthy AES path. Tagged by outcome (hit/miss).
+        KeyResolutionDuration = Meter.CreateHistogram<double>(
+            "orionvault.key_resolution.duration_ms", "ms",
+            "IKeyProvider.TryGetKey wall-clock per call.");
         // v0.2.15 last-cycle ObservableGauges. The callback returns the value snapshotted
         // by the most recent RunCycleAsync; the OTel scraper reads it synchronously.
         _ = Meter.CreateObservableGauge<long>("orionvault.rotation.last_cycle.scanned", () => Interlocked.Read(ref lastCycleScanned),

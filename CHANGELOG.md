@@ -4,6 +4,25 @@ All notable changes to OrionVault are recorded here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.2.21] - 2026-06-11
+
+### Added
+
+#### `orionvault.key_resolution.duration_ms` histogram
+
+`Histogram<double>` measuring `IKeyProvider.TryGetKey` wall-clock per call. Operators graph p99 to spot a key provider whose backend (Key Vault, KMS, database-backed `IKeyProvider`) has regressed - the existing `orionvault.encryption.duration_ms` histogram captures the FULL round-trip which mixes key lookup + AES work, hiding backend-side slowdowns inside an otherwise healthy AES path.
+
+- Tagged with `outcome` (`hit` / `miss`).
+- Recorded inside `AesGcmEncryptor.LookupKey` around the `_keys.TryGetKey(keyId)` call.
+
+### Tests
+
+1 fact.
+
+### Migration from v0.2.20
+
+Source-compatible.
+
 ## [0.2.20] - 2026-06-11
 
 ### Added

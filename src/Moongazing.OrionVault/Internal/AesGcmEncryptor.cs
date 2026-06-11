@@ -175,7 +175,13 @@ internal sealed class AesGcmEncryptor : IEncryptor
 
     private ReadOnlyMemory<byte> LookupKey(short keyId)
     {
+        // v0.2.21: time the key resolution round-trip so a slow backend (Key Vault,
+        // KMS, database-backed IKeyProvider) surfaces independently of the AES work
+        // captured by the encryption.duration histogram.
+        var sw = Stopwatch.GetTimestamp();
         var k = _keys.TryGetKey(keyId);
+        _diag.KeyResolutionDuration.Record(Stopwatch.GetElapsedTime(sw).TotalMilliseconds,
+            new KeyValuePair<string, object?>("outcome", k.HasValue && !k.Value.IsEmpty ? "hit" : "miss"));
         _diag.KeyLookups.Add(1,
             new KeyValuePair<string, object?>("key_id", keyId),
             new KeyValuePair<string, object?>("outcome", k.HasValue && !k.Value.IsEmpty ? "hit" : "miss"));
