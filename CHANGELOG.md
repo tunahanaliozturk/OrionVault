@@ -4,6 +4,25 @@ All notable changes to OrionVault are recorded here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.2.21] - 2026-06-11
+
+### Added
+
+#### `orionvault.key_resolution.duration_ms` histogram
+
+`Histogram<double>` measuring `IKeyProvider.TryGetKey` wall-clock per call. Operators graph p99 to spot a key provider whose backend (Key Vault, KMS, database-backed `IKeyProvider`) has regressed - the existing `orionvault.encryption.duration_ms` histogram captures the FULL round-trip which mixes key lookup + AES work, hiding backend-side slowdowns inside an otherwise healthy AES path.
+
+- Tagged with `outcome` (`hit` / `miss`).
+- Recorded inside `AesGcmEncryptor.LookupKey` around the `_keys.TryGetKey(keyId)` call.
+
+### Tests
+
+1 fact.
+
+### Migration from v0.2.20
+
+Source-compatible.
+
 ## [0.2.20] - 2026-06-11
 
 ### Added
@@ -588,7 +607,8 @@ Replace `<PackageReference Include="Moongazing.OrionVault" Version="0.1.1" />` w
 - Only `string` and `byte[]` CLR types are supported. Numeric/DateTime/decimal/JSON types are on the v0.3 roadmap.
 - No cloud KMS providers yet (AWS, Azure, GCP, HashiCorp, DPAPI). All planned for v0.2 / v0.4 roadmap.
 
-[Unreleased]: https://github.com/tunahanaliozturk/OrionVault/compare/v0.2.20...HEAD
+[Unreleased]: https://github.com/tunahanaliozturk/OrionVault/compare/v0.2.21...HEAD
+[0.2.21]: https://github.com/tunahanaliozturk/OrionVault/releases/tag/v0.2.21
 [0.2.20]: https://github.com/tunahanaliozturk/OrionVault/releases/tag/v0.2.20
 [0.2.19]: https://github.com/tunahanaliozturk/OrionVault/releases/tag/v0.2.19
 [0.2.18]: https://github.com/tunahanaliozturk/OrionVault/releases/tag/v0.2.18
