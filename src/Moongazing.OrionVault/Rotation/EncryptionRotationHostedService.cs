@@ -25,6 +25,10 @@ public sealed partial class EncryptionRotationHostedService<THandle> : Backgroun
         Message = "EncryptionRotation row failed (rotated={Rotated} so far this cycle)")]
     private partial void LogRowFailed(int rotated, Exception ex);
 
+    [LoggerMessage(EventId = 3, Level = LogLevel.Warning,
+        Message = "IKeyRotationObserver faulted; rotation sweep continued")]
+    private partial void LogObserverFaulted(Exception ex);
+
     private readonly IServiceScopeFactory scopeFactory;
     private readonly EncryptionRotationOptions options;
     private readonly ILogger<EncryptionRotationHostedService<THandle>> logger;
@@ -131,11 +135,14 @@ public sealed partial class EncryptionRotationHostedService<THandle> : Backgroun
                 observer.OnRotationCycleCompleted(result);
             }
 #pragma warning disable CA1031
-            catch
+            catch (Exception observerEx)
 #pragma warning restore CA1031
             {
                 // Same fate model as the ProgressCallback: faults do not abort the
-                // sweep. The OrionVaultDiagnostics counters remain authoritative.
+                // sweep. Logged so operators can trace observer regressions, matching
+                // the public IKeyRotationObserver contract that says faults are
+                // "caught and logged".
+                LogObserverFaulted(observerEx);
             }
         }
         return result;
