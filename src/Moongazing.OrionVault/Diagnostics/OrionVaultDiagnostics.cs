@@ -24,6 +24,22 @@ public sealed class OrionVaultDiagnostics : IDisposable
     internal Counter<long> RotationRowErrors { get; }
     internal Histogram<double> RotationCycleDuration { get; }
 
+    // v0.2.15 last-cycle snapshot, fed by EncryptionRotationHostedService at the end of
+    // every RunCycleAsync. Operators graph the gauges as a "right-now" view of what the
+    // last sweep produced, complementing the steady-state counter rates.
+    private long lastCycleScanned;
+    private long lastCycleRotated;
+    private long lastCycleSkipped;
+    private long lastCycleErrors;
+
+    internal void SetLastCycleSnapshot(int scanned, int rotated, int skipped, int errors)
+    {
+        Interlocked.Exchange(ref lastCycleScanned, scanned);
+        Interlocked.Exchange(ref lastCycleRotated, rotated);
+        Interlocked.Exchange(ref lastCycleSkipped, skipped);
+        Interlocked.Exchange(ref lastCycleErrors, errors);
+    }
+
     public OrionVaultDiagnostics()
     {
         ActivitySource = new ActivitySource(ActivitySourceName, "0.2.0");
@@ -56,6 +72,16 @@ public sealed class OrionVaultDiagnostics : IDisposable
             "Rows that threw during decrypt or re-encrypt (cycle continues; rows are not aborted).");
         RotationCycleDuration = Meter.CreateHistogram<double>("orionvault.rotation.cycle_duration_ms", "ms",
             "Wall-clock duration of one rotation cycle.");
+        // v0.2.15 last-cycle ObservableGauges. The callback returns the value snapshotted
+        // by the most recent RunCycleAsync; the OTel scraper reads it synchronously.
+        _ = Meter.CreateObservableGauge<long>("orionvault.rotation.last_cycle.scanned", () => Interlocked.Read(ref lastCycleScanned),
+            "{rows}", "Rows the last rotation cycle scanned.");
+        _ = Meter.CreateObservableGauge<long>("orionvault.rotation.last_cycle.rotated", () => Interlocked.Read(ref lastCycleRotated),
+            "{rows}", "Rows the last rotation cycle rotated.");
+        _ = Meter.CreateObservableGauge<long>("orionvault.rotation.last_cycle.skipped", () => Interlocked.Read(ref lastCycleSkipped),
+            "{rows}", "Rows the last rotation cycle skipped (already on active key).");
+        _ = Meter.CreateObservableGauge<long>("orionvault.rotation.last_cycle.errors", () => Interlocked.Read(ref lastCycleErrors),
+            "{rows}", "Per-row errors in the last rotation cycle.");
     }
 
     public void Dispose()
