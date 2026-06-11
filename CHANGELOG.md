@@ -4,6 +4,26 @@ All notable changes to OrionVault are recorded here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.2.16] - 2026-06-11
+
+### Added
+
+#### `orionvault.rotation.last_cycle_at_unix_seconds` ObservableGauge
+
+Unix-seconds timestamp gauge of the last rotation cycle completion. Operators page on `(now() - orionvault_rotation_last_cycle_at_unix_seconds) > N` to detect a stalled rotation host long before the v0.2.15 row counters reveal it.
+
+- Reports 0 until the FIRST cycle completes so "never ran" is distinguishable from "epoch".
+- Updated atomically via `Interlocked.Exchange` alongside the v0.2.15 last-cycle counters.
+- Pairs with v0.2.15 row-shape gauges: timestamp answers "when did the last sweep run", row counts answer "what did it produce".
+
+### Tests
+
+1 fact.
+
+### Migration from v0.2.15
+
+Source-compatible.
+
 ## [0.2.15] - 2026-06-11
 
 ### Added
