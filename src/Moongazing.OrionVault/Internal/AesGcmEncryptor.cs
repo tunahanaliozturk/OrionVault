@@ -177,9 +177,21 @@ internal sealed class AesGcmEncryptor : IEncryptor
     {
         // v0.2.21: time the key resolution round-trip so a slow backend (Key Vault,
         // KMS, database-backed IKeyProvider) surfaces independently of the AES work
-        // captured by the encryption.duration histogram.
+        // captured by the encryption.duration histogram. try/finally so a TryGetKey
+        // that THROWS still emits the duration sample - exactly the case operators
+        // need to see when the key backend is failing.
         var sw = Stopwatch.GetTimestamp();
-        var k = _keys.TryGetKey(keyId);
+        ReadOnlyMemory<byte>? k;
+        try
+        {
+            k = _keys.TryGetKey(keyId);
+        }
+        catch
+        {
+            _diag.KeyResolutionDuration.Record(Stopwatch.GetElapsedTime(sw).TotalMilliseconds,
+                new KeyValuePair<string, object?>("outcome", "error"));
+            throw;
+        }
         _diag.KeyResolutionDuration.Record(Stopwatch.GetElapsedTime(sw).TotalMilliseconds,
             new KeyValuePair<string, object?>("outcome", k.HasValue && !k.Value.IsEmpty ? "hit" : "miss"));
         _diag.KeyLookups.Add(1,
