@@ -118,6 +118,26 @@ public sealed partial class EncryptionRotationHostedService<THandle> : Backgroun
                 // counters; they should not bubble up and skip the next cycle.
             }
         }
+        // v0.2.20 IKeyRotationObserver: DI-registered alternative to the options-based
+        // ProgressCallback. Resolved from the per-cycle scope (same scope the encryptor
+        // and key provider come from). Skipped when no observer is registered AND when a
+        // NullKeyRotationObserver is registered (the same null-or-Null convention used
+        // by the v0.2.19 decryption failure handler and v0.2.18 patch dead-letter sink).
+        var observer = scope.ServiceProvider.GetService<Abstractions.IKeyRotationObserver>();
+        if (observer is not null and not Abstractions.NullKeyRotationObserver)
+        {
+            try
+            {
+                observer.OnRotationCycleCompleted(result);
+            }
+#pragma warning disable CA1031
+            catch
+#pragma warning restore CA1031
+            {
+                // Same fate model as the ProgressCallback: faults do not abort the
+                // sweep. The OrionVaultDiagnostics counters remain authoritative.
+            }
+        }
         return result;
     }
 
