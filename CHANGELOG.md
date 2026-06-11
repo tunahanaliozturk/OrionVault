@@ -4,6 +4,28 @@ All notable changes to OrionVault are recorded here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.2.12] - 2026-06-11
+
+### Added
+
+#### `EncryptionRotationHostedService<THandle>` background re-encryption sweep
+
+Builds on the v0.2.11 `EncryptionRotator` primitive. v0.2.11 shipped `Rotate(IEncryptor, byte[])` for one-shot scripts; v0.2.12 ships the hosted-service equivalent.
+
+- `IRotationSource<THandle>` abstracts the storage walk (consumer implements for their table / store).
+- `EncryptionRotationHostedService<THandle>.RunCycleAsync` filters via `EncryptionRotator.NeedsRotation`, re-encrypts via `EncryptionRotator.Rotate`, writes through `IRotationSource.UpdateAsync`.
+- `EncryptionRotationOptions`: `Interval` (default 6 hours), `MaxRowsPerCycle` (nullable, default unlimited).
+- `RotationCycleResult(Scanned, Rotated, Skipped, Errors)` per cycle.
+- Per-row failures swallowed + counted so one malformed blob does not abort the sweep.
+
+### Tests
+
+4 new facts.
+
+### Migration from v0.2.11
+
+Source-compatible.
+
 ## [0.2.11] - 2026-06-11
 
 ### Added
