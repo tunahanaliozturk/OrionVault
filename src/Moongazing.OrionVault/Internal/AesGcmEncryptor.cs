@@ -12,13 +12,42 @@ internal sealed class AesGcmEncryptor : IEncryptor
     private const int KeyLengthBytes = 32;
     private readonly IKeyProvider _keys;
     private readonly OrionVaultDiagnostics _diag;
+    // v0.2.19 optional consumer-supplied failure observer. Null when no handler is
+    // registered; the encryptor treats null as no-op.
+    private readonly Abstractions.IDecryptionFailureHandler? _failureHandler;
 
     public AesGcmEncryptor(IKeyProvider keys, OrionVaultDiagnostics diag)
+        : this(keys, diag, failureHandler: null)
+    {
+    }
+
+    /// <summary>v0.2.19 ctor overload that wires the optional <see cref="Abstractions.IDecryptionFailureHandler"/>.</summary>
+    public AesGcmEncryptor(IKeyProvider keys, OrionVaultDiagnostics diag, Abstractions.IDecryptionFailureHandler? failureHandler)
     {
         ArgumentNullException.ThrowIfNull(keys);
         ArgumentNullException.ThrowIfNull(diag);
         _keys = keys;
         _diag = diag;
+        _failureHandler = failureHandler is Abstractions.NullDecryptionFailureHandler ? null : failureHandler;
+    }
+
+    private void InvokeFailureHandler(string reason, short keyId, System.Exception exception)
+    {
+        if (_failureHandler is null)
+        {
+            return;
+        }
+        try
+        {
+            _failureHandler.OnDecryptionFailed(reason, keyId, exception);
+        }
+#pragma warning disable CA1031 // handler is observability, not load-bearing
+        catch
+#pragma warning restore CA1031
+        {
+            // handler faults are intentionally swallowed - the underlying decryption
+            // exception will still propagate to the caller below.
+        }
     }
 
     public byte[] EncryptString(string plaintext)
@@ -112,8 +141,10 @@ internal sealed class AesGcmEncryptor : IEncryptor
                     new KeyValuePair<string, object?>("reason", "tampered"),
                     new KeyValuePair<string, object?>("key_id", keyId));
                 activity?.SetTag("outcome", "tampered");
-                throw new OrionVaultDecryptionException(
+                var tamperedException = new OrionVaultDecryptionException(
                     "Ciphertext failed authentication (tampered, wrong key, or corrupted).", ex);
+                InvokeFailureHandler("tampered", keyId, tamperedException);
+                throw tamperedException;
             }
 
             _diag.Decryptions.Add(1,
@@ -125,8 +156,9 @@ internal sealed class AesGcmEncryptor : IEncryptor
             activity?.SetTag("outcome", "success");
             return plaintext;
         }
-        catch (OrionVaultKeyNotFoundException)
+        catch (OrionVaultKeyNotFoundException knfEx)
         {
+            InvokeFailureHandler("key_not_found", keyId, knfEx);
             _diag.DecryptionFailures.Add(1,
                 new KeyValuePair<string, object?>("reason", "key_not_found"),
                 new KeyValuePair<string, object?>("key_id", keyId));
