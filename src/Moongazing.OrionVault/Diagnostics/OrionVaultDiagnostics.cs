@@ -31,6 +31,7 @@ public sealed class OrionVaultDiagnostics : IDisposable
     private long lastCycleRotated;
     private long lastCycleSkipped;
     private long lastCycleErrors;
+    private long lastCycleAtUnixSeconds;
 
     internal void SetLastCycleSnapshot(int scanned, int rotated, int skipped, int errors)
     {
@@ -38,6 +39,7 @@ public sealed class OrionVaultDiagnostics : IDisposable
         Interlocked.Exchange(ref lastCycleRotated, rotated);
         Interlocked.Exchange(ref lastCycleSkipped, skipped);
         Interlocked.Exchange(ref lastCycleErrors, errors);
+        Interlocked.Exchange(ref lastCycleAtUnixSeconds, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
     }
 
     public OrionVaultDiagnostics()
@@ -82,6 +84,12 @@ public sealed class OrionVaultDiagnostics : IDisposable
             "{rows}", "Rows the last rotation cycle skipped (already on active key).");
         _ = Meter.CreateObservableGauge<long>("orionvault.rotation.last_cycle.errors", () => Interlocked.Read(ref lastCycleErrors),
             "{rows}", "Per-row errors in the last rotation cycle.");
+        // v0.2.16 timestamp gauge in Unix seconds. Operators page on
+        // `(now() - orionvault_rotation_last_cycle_at_unix_seconds) > N` to detect a
+        // stalled rotation host long before the row counters reveal it. Reports 0 until
+        // the FIRST cycle completes so 'never ran' is distinguishable from 'epoch'.
+        _ = Meter.CreateObservableGauge<long>("orionvault.rotation.last_cycle_at_unix_seconds", () => Interlocked.Read(ref lastCycleAtUnixSeconds),
+            "s", "Unix seconds timestamp of the last rotation cycle completion (0 if no cycle has run yet).");
     }
 
     public void Dispose()
