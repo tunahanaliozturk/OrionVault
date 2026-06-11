@@ -4,6 +4,26 @@ All notable changes to OrionVault are recorded here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.2.17] - 2026-06-11
+
+### Added
+
+#### `orionvault.encryption.payload_size_bytes` histogram
+
+`Histogram<int>` exposes the distribution of plaintext payload sizes per encrypt operation. Operators graph p99 to size connection-pool buffers and spot a tenant bulk-import path that drove huge encrypt calls (which the existing duration histogram alone cannot distinguish from "small encrypt + slow AES").
+
+- Recorded in `AesGcmEncryptor.EncryptInternal` per call, value = `plaintext.Length` in bytes.
+- Public on `OrionVaultDiagnostics.EncryptionPayloadSize` via the standard internal exposure pattern.
+- Complements `orionvault.encryption.duration_ms`: duration is wall-clock, payload_size is byte-shape; the ratio reveals AES throughput.
+
+### Tests
+
+1 fact.
+
+### Migration from v0.2.16
+
+Source-compatible.
+
 ## [0.2.16] - 2026-06-11
 
 ### Added
