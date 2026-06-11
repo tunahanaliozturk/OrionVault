@@ -119,6 +119,9 @@ internal sealed class AesGcmEncryptor : IEncryptor
             _diag.Decryptions.Add(1,
                 new KeyValuePair<string, object?>("algorithm", "aes-gcm-256"),
                 new KeyValuePair<string, object?>("key_id", keyId));
+            // v0.2.18: record decrypted plaintext size to mirror the v0.2.17 encrypt
+            // histogram so operators see both directions on one dashboard.
+            _diag.DecryptionPayloadSize.Record(plaintext.Length);
             activity?.SetTag("outcome", "success");
             return plaintext;
         }

@@ -4,6 +4,25 @@ All notable changes to OrionVault are recorded here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.2.18] - 2026-06-11
+
+### Added
+
+#### `orionvault.decryption.payload_size_bytes` histogram
+
+`Histogram<int>` mirrors the v0.2.17 encrypt-side histogram for the decrypt path. Operators graph both side-by-side to confirm encrypt/decrypt traffic shape stays balanced.
+
+- Recorded in `AesGcmEncryptor.DecryptInternal` on the success path with `plaintext.Length`.
+- Public on `OrionVaultDiagnostics.DecryptionPayloadSize`.
+
+### Tests
+
+1 fact.
+
+### Migration from v0.2.17
+
+Source-compatible.
+
 ## [0.2.17] - 2026-06-11
 
 ### Added
