@@ -63,6 +63,11 @@ internal sealed class AesGcmEncryptor : IEncryptor
             _diag.Encryptions.Add(1,
                 new KeyValuePair<string, object?>("algorithm", "aes-gcm-256"),
                 new KeyValuePair<string, object?>("key_id", keyId));
+            // v0.2.17: record plaintext size in bytes so operators can graph the p99
+            // payload distribution. The histogram is sized in bytes (no kB scaling)
+            // because the underlying type is int and small messages dominate; consumers
+            // can apply downstream rebucketing if needed.
+            _diag.EncryptionPayloadSize.Record(plaintext.Length);
             return output;
         }
         finally

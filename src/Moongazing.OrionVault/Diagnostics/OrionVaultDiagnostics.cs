@@ -23,6 +23,7 @@ public sealed class OrionVaultDiagnostics : IDisposable
     internal Counter<long> RotationRowsSkipped { get; }
     internal Counter<long> RotationRowErrors { get; }
     internal Histogram<double> RotationCycleDuration { get; }
+    internal Histogram<int> EncryptionPayloadSize { get; }
 
     // v0.2.15 last-cycle snapshot, fed by EncryptionRotationHostedService at the end of
     // every RunCycleAsync. Operators graph the gauges as a "right-now" view of what the
@@ -74,6 +75,13 @@ public sealed class OrionVaultDiagnostics : IDisposable
             "Rows that threw during decrypt or re-encrypt (cycle continues; rows are not aborted).");
         RotationCycleDuration = Meter.CreateHistogram<double>("orionvault.rotation.cycle_duration_ms", "ms",
             "Wall-clock duration of one rotation cycle.");
+        // v0.2.17 distribution of plaintext payload size in bytes per encrypt call.
+        // Operators graph p99 to size connection-pool buffers and spot a tenant
+        // bulk-import path that drove huge encrypt calls (which the duration histogram
+        // alone cannot distinguish from "small encrypt + slow AES").
+        EncryptionPayloadSize = Meter.CreateHistogram<int>(
+            "orionvault.encryption.payload_size_bytes", "By",
+            "Plaintext size per encrypt operation in bytes.");
         // v0.2.15 last-cycle ObservableGauges. The callback returns the value snapshotted
         // by the most recent RunCycleAsync; the OTel scraper reads it synchronously.
         _ = Meter.CreateObservableGauge<long>("orionvault.rotation.last_cycle.scanned", () => Interlocked.Read(ref lastCycleScanned),
