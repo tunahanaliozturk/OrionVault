@@ -32,7 +32,15 @@ public static class OrionVaultServiceCollectionExtensions
                 $"ActiveKeyId {options.ActiveKeyId} is not registered. Registered ids: [{string.Join(", ", keys.Keys)}].");
 
         services.AddSingleton<IKeyProvider>(_ => new StaticKeyProvider(keys, options.ActiveKeyId));
-        services.AddSingleton<OrionVaultDiagnostics>();
+        // v0.2.22: wire the active-key-id gauge snapshot at construction time so the
+        // orionvault.active_key_id observable gauge reports the configured value from
+        // the moment the host starts emitting metrics.
+        services.AddSingleton<OrionVaultDiagnostics>(_ =>
+        {
+            var diag = new OrionVaultDiagnostics();
+            diag.SetActiveKeyIdSnapshot(options.ActiveKeyId);
+            return diag;
+        });
         services.AddSingleton<IEncryptor, AesGcmEncryptor>();
 
         return new OrionVaultBuilder(services);

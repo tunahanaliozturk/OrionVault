@@ -35,6 +35,18 @@ public sealed class OrionVaultDiagnostics : IDisposable
     private long lastCycleSkipped;
     private long lastCycleErrors;
     private long lastCycleAtUnixSeconds;
+    // v0.2.22 active key id snapshot, fed by SetActiveKeyIdSnapshot at startup (and on
+    // every key provider refresh if the host wires it). 0 until first set; operators
+    // graph the gauge as 'right-now which key is the active write key' so a stale
+    // rollout / config drift is visible without scraping logs.
+    private long activeKeyId;
+
+    /// <summary>
+    /// v0.2.22 active-key snapshot setter. Call once at startup and after every
+    /// IKeyProvider refresh so the ObservableGauge reports the current write key.
+    /// </summary>
+    public void SetActiveKeyIdSnapshot(short value)
+        => Interlocked.Exchange(ref activeKeyId, value);
 
     internal void SetLastCycleSnapshot(int scanned, int rotated, int skipped, int errors)
     {
@@ -114,6 +126,12 @@ public sealed class OrionVaultDiagnostics : IDisposable
         // the FIRST cycle completes so 'never ran' is distinguishable from 'epoch'.
         _ = Meter.CreateObservableGauge<long>("orionvault.rotation.last_cycle_at_unix_seconds", () => Interlocked.Read(ref lastCycleAtUnixSeconds),
             "s", "Unix seconds timestamp of the last rotation cycle completion (0 if no cycle has run yet).");
+        // v0.2.22 active-key gauge. Reports 0 until SetActiveKeyIdSnapshot has been
+        // called; consumers wire it inside their AddOrionVault registration so the
+        // metric reflects the configured IKeyProvider.ActiveKeyId.
+        _ = Meter.CreateObservableGauge<long>("orionvault.active_key_id",
+            () => Interlocked.Read(ref activeKeyId),
+            "{key_id}", "Currently active write-key id (0 if SetActiveKeyIdSnapshot has not been called).");
     }
 
     public void Dispose()
