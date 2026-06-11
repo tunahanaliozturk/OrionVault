@@ -4,6 +4,32 @@ All notable changes to OrionVault are recorded here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.2.20] - 2026-06-11
+
+### Added
+
+#### `IKeyRotationObserver` DI-based rotation observer
+
+Consumer-supplied observer invoked after each `EncryptionRotationHostedService<THandle>` cycle. Mirrors the v0.2.14 options-based `ProgressCallback` but registered via DI so it composes naturally with the host's other services (logger factories, tenant scopes).
+
+- `IKeyRotationObserver` in `Moongazing.OrionVault.Abstractions`.
+- `NullKeyRotationObserver` no-op default.
+- Resolved from the per-cycle service scope; null and Null observers both skip the call.
+- Fires AFTER OTel + log + ProgressCallback so observers see the same totals; throwing observer does NOT abort the sweep.
+- The legacy `ProgressCallback` still fires; both run when both are configured.
+
+### Tests
+
+2 facts.
+
+### Migration from v0.2.19
+
+Source-compatible.
+
+```csharp
+services.AddSingleton<IKeyRotationObserver, MyObserver>();
+```
+
 ## [0.2.19] - 2026-06-11
 
 ### Added
