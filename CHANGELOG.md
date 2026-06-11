@@ -4,6 +4,31 @@ All notable changes to OrionVault are recorded here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.2.15] - 2026-06-11
+
+### Added
+
+#### `orionvault.rotation.last_cycle.*` ObservableGauges
+
+Four new `ObservableGauge<long>` instruments on `OrionVaultDiagnostics` expose the just-completed rotation cycle as a "right-now" snapshot:
+
+- `orionvault.rotation.last_cycle.scanned`
+- `orionvault.rotation.last_cycle.rotated`
+- `orionvault.rotation.last_cycle.skipped`
+- `orionvault.rotation.last_cycle.errors`
+
+Fed by `EncryptionRotationHostedService.RunCycleAsync` at the end of every cycle via `OrionVaultDiagnostics.SetLastCycleSnapshot`. Operators see the v0.2.13 steady-state counters AND the v0.2.15 gauges side by side: counters answer "what is the rate?", gauges answer "what did the last sweep produce?".
+
+Write side uses `Interlocked.Exchange` so the OTel scraper never reads a torn value.
+
+### Tests
+
+1 fact.
+
+### Migration from v0.2.14
+
+Source-compatible.
+
 ## [0.2.14] - 2026-06-11
 
 ### Added

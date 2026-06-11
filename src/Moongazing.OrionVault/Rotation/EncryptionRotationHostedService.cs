@@ -96,6 +96,9 @@ public sealed partial class EncryptionRotationHostedService<THandle> : Backgroun
         }
         sw.Stop();
         diagnostics?.RotationCycleDuration.Record(sw.Elapsed.TotalMilliseconds);
+        // v0.2.15: feed the last-cycle ObservableGauges so operators see a "right-now"
+        // snapshot of what the most recent sweep produced.
+        diagnostics?.SetLastCycleSnapshot(scanned, rotated, skipped, errors);
         LogCycle(scanned, rotated, skipped, errors, sw.Elapsed);
         var result = new RotationCycleResult(scanned, rotated, skipped, errors);
         // v0.2.14 ProgressCallback: invoked AFTER OTel + log so observers see the same
