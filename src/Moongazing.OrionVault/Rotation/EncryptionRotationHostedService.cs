@@ -6,6 +6,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Moongazing.OrionVault.Abstractions;
+using Moongazing.OrionVault.Diagnostics;
 
 /// <summary>
 /// Background service that walks an <see cref="IRotationSource{THandle}"/>, calls
@@ -49,6 +50,7 @@ public sealed partial class EncryptionRotationHostedService<THandle> : Backgroun
         var encryptor = scope.ServiceProvider.GetRequiredService<IEncryptor>();
         var keys = scope.ServiceProvider.GetRequiredService<IKeyProvider>();
         var source = scope.ServiceProvider.GetRequiredService<IRotationSource<THandle>>();
+        var diagnostics = scope.ServiceProvider.GetService<OrionVaultDiagnostics>();
         var activeKeyId = keys.ActiveKeyId;
 
         var sw = System.Diagnostics.Stopwatch.StartNew();
@@ -65,6 +67,7 @@ public sealed partial class EncryptionRotationHostedService<THandle> : Backgroun
             if (!EncryptionRotator.NeedsRotation(candidate.Ciphertext, activeKeyId))
             {
                 skipped++;
+                diagnostics?.RotationRowsSkipped.Add(1);
                 continue;
             }
             try
@@ -72,6 +75,7 @@ public sealed partial class EncryptionRotationHostedService<THandle> : Backgroun
                 var fresh = EncryptionRotator.Rotate(encryptor, candidate.Ciphertext);
                 await source.UpdateAsync(candidate.Handle, fresh, cancellationToken).ConfigureAwait(false);
                 rotated++;
+                diagnostics?.RotationRowsRotated.Add(1);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -82,6 +86,7 @@ public sealed partial class EncryptionRotationHostedService<THandle> : Backgroun
 #pragma warning restore CA1031
             {
                 errors++;
+                diagnostics?.RotationRowErrors.Add(1);
                 LogRowFailed(rotated, ex);
             }
             if (options.MaxRowsPerCycle is { } cap && rotated >= cap)
@@ -90,6 +95,7 @@ public sealed partial class EncryptionRotationHostedService<THandle> : Backgroun
             }
         }
         sw.Stop();
+        diagnostics?.RotationCycleDuration.Record(sw.Elapsed.TotalMilliseconds);
         LogCycle(scanned, rotated, skipped, errors, sw.Elapsed);
         return new RotationCycleResult(scanned, rotated, skipped, errors);
     }
