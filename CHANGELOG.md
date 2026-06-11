@@ -4,6 +4,32 @@ All notable changes to OrionVault are recorded here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.2.19] - 2026-06-11
+
+### Added
+
+#### `IDecryptionFailureHandler` extensibility
+
+Consumer-supplied observer invoked when an AES-GCM decrypt fails. Useful for routing to an external alerting system (Slack, PagerDuty, SIEM) without baking the routing into the encryptor.
+
+- `IDecryptionFailureHandler` interface in `Moongazing.OrionVault.Abstractions`.
+- `NullDecryptionFailureHandler` no-op default.
+- AesGcmEncryptor 3-arg ctor wires the optional handler; the 2-arg ctor is preserved for back-compat.
+- Handler runs AFTER the failure counter increments and BEFORE the exception propagates; handler exceptions are swallowed so the original failure is never masked.
+- Two reasons currently emitted: `tampered`, `key_not_found`.
+
+### Tests
+
+2 facts.
+
+### Migration from v0.2.18
+
+Source-compatible.
+
+```csharp
+services.AddSingleton<IDecryptionFailureHandler, MyAlertingHandler>();
+```
+
 ## [0.2.18] - 2026-06-11
 
 ### Added

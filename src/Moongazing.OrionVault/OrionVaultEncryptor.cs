@@ -23,9 +23,19 @@ public static class OrionVaultEncryptor
     /// counters land on the same telemetry stream as the default one.
     /// </summary>
     public static IEncryptor Create(IKeyProvider keys, OrionVaultDiagnostics diagnostics)
+        => Create(keys, diagnostics, failureHandler: null);
+
+    /// <summary>
+    /// v0.2.19 overload that wires the optional <see cref="IDecryptionFailureHandler"/>
+    /// alongside the keyed encryptor. Keyed-provider callers
+    /// (<c>UseEntityFrameworkCore(...)</c> with <c>AddNamedKeyProvider</c>) should resolve
+    /// <see cref="IDecryptionFailureHandler"/> from DI and pass it here so failure
+    /// observation works the same as the default global encryptor.
+    /// </summary>
+    public static IEncryptor Create(IKeyProvider keys, OrionVaultDiagnostics diagnostics, IDecryptionFailureHandler? failureHandler)
     {
         ArgumentNullException.ThrowIfNull(keys);
         ArgumentNullException.ThrowIfNull(diagnostics);
-        return new AesGcmEncryptor(keys, diagnostics);
+        return new AesGcmEncryptor(keys, diagnostics, failureHandler);
     }
 }
