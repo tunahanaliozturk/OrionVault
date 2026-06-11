@@ -4,6 +4,27 @@ All notable changes to OrionVault are recorded here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.2.11] - 2026-06-11
+
+### Added
+
+#### `EncryptionRotator` - one-shot key rotation helper
+
+Helper for consumers running a one-shot rotation pass after rolling the `ActiveKeyId` on their `IKeyProvider`. Existing rows still carry the previous-active key id in their AES-GCM header; v0.2.11 ships the primitive that re-encrypts each blob under the new key.
+
+- `EncryptionRotator.NeedsRotation(byte[], activeKeyId)` reads the 2-byte big-endian key id header WITHOUT decrypting so rotation jobs can cheaply skip rows already on the active key.
+- `EncryptionRotator.Rotate(IEncryptor, byte[])` decrypts under whatever key id the header carries and re-encrypts under the active key. The encryptor MUST know both keys.
+- `EncryptionRotator.RotateString(IEncryptor, byte[])` convenience overload for UTF-8 string columns.
+- The rotator does NOT walk EF Core tables itself - consumers feed it a stream of ciphertexts because the query shape depends on the table layout.
+
+### Tests
+
+6 new facts.
+
+### Migration from v0.2.10
+
+Source-compatible.
+
 ## [0.2.10] - 2026-06-11
 
 ### Added
