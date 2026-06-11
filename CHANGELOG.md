@@ -4,6 +4,26 @@ All notable changes to OrionVault are recorded here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.2.14] - 2026-06-11
+
+### Added
+
+#### `EncryptionRotationOptions.ProgressCallback`
+
+Optional per-cycle delegate invoked AFTER OTel emission with the `RotationCycleResult`. Useful for consumer-side dashboards, Slack notifiers, or operator audit logs that want the same totals the v0.2.13 metrics expose.
+
+- `Action<RotationCycleResult>? ProgressCallback` on `EncryptionRotationOptions`.
+- Callback exceptions are caught and swallowed: a faulty notifier never aborts the rotation sweep. The sweep is the load-bearing path; the callback is observability.
+- Fires AFTER `OrionVaultDiagnostics.RotationCycleDuration.Record` so a callback that reads metrics on the side sees the just-recorded sample.
+
+### Tests
+
+2 new facts.
+
+### Migration from v0.2.13
+
+Source-compatible.
+
 ## [0.2.13] - 2026-06-11
 
 ### Added
