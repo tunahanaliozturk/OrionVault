@@ -4,6 +4,28 @@ All notable changes to OrionVault are recorded here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.2.13] - 2026-06-11
+
+### Added
+
+#### Rotation telemetry on `OrionVaultDiagnostics`
+
+Four new instruments wire `EncryptionRotationHostedService<THandle>` (v0.2.12) into OTel so operators can graph rotation progress and convergence without scraping logs.
+
+- `orionvault.rotation.rows_rotated` (`Counter<long>`): rows re-encrypted under the active key id.
+- `orionvault.rotation.rows_skipped` (`Counter<long>`): rows where `NeedsRotation` returned false (already on the active key).
+- `orionvault.rotation.row_errors` (`Counter<long>`): per-row decrypt / re-encrypt failures that the sweep swallowed and counted.
+- `orionvault.rotation.cycle_duration_ms` (`Histogram<double>`): wall-clock per cycle.
+- The hosted service resolves `OrionVaultDiagnostics` via `GetService` (optional) - if the consumer has not wired diagnostics the rotation runs unchanged with no emissions.
+
+### Tests
+
+1 new fact.
+
+### Migration from v0.2.12
+
+Source-compatible.
+
 ## [0.2.12] - 2026-06-11
 
 ### Added
