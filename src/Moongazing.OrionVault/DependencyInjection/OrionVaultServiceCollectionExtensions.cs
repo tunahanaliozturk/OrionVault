@@ -41,7 +41,15 @@ public static class OrionVaultServiceCollectionExtensions
             diag.SetActiveKeyIdSnapshot(options.ActiveKeyId);
             return diag;
         });
-        services.AddSingleton<IEncryptor, AesGcmEncryptor>();
+        // v0.2.23: explicit ctor invocation so optional hooks (IDecryptionFailureHandler,
+        // IEncryptionAuditObserver) are wired independently. ActivatorUtilities longest-
+        // ctor pick would silently drop one hook when only the other is registered -
+        // same trap as the v0.2.20 OrionPatch P1.
+        services.AddSingleton<IEncryptor>(sp => new Internal.AesGcmEncryptor(
+            sp.GetRequiredService<IKeyProvider>(),
+            sp.GetRequiredService<Diagnostics.OrionVaultDiagnostics>(),
+            sp.GetService<IDecryptionFailureHandler>(),
+            sp.GetService<IEncryptionAuditObserver>()));
 
         return new OrionVaultBuilder(services);
     }

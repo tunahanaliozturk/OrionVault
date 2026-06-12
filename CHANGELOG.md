@@ -4,6 +4,32 @@ All notable changes to OrionVault are recorded here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.2.23] - 2026-06-12
+
+### Added
+
+#### `IEncryptionAuditObserver` extensibility
+
+Consumer-supplied observer invoked on EVERY successful encrypt and decrypt. Useful for compliance regimes that require an audit trail of cryptographic operations (key id, byte sizes) without coupling the audit logic to the load-bearing AES path.
+
+- `IEncryptionAuditObserver` interface with `OnEncrypted(keyId, plaintextLen, ciphertextLen)` and `OnDecrypted(keyId, ciphertextLen, plaintextLen)`.
+- `NullEncryptionAuditObserver` no-op default.
+- New `AesGcmEncryptor` 4-arg ctor wires both `IDecryptionFailureHandler` AND `IEncryptionAuditObserver`; legacy 2-arg and 3-arg ctors preserved.
+- `AddOrionVault` now uses explicit DI registration so both hooks wire independently - registering only one no longer silently drops the other (lesson learned from v0.2.20 OrionPatch P1 ActivatorUtilities trap).
+- Observer fires AFTER the operation succeeds, BEFORE the result returns. Throwing observer is swallowed so audit-side outage cannot affect the cryptographic path.
+
+### Tests
+
+2 facts.
+
+### Migration from v0.2.22
+
+Source-compatible.
+
+```csharp
+services.AddSingleton<IEncryptionAuditObserver, MyAuditObserver>();
+```
+
 ## [0.2.22] - 2026-06-11
 
 ### Added
@@ -627,7 +653,8 @@ Replace `<PackageReference Include="Moongazing.OrionVault" Version="0.1.1" />` w
 - Only `string` and `byte[]` CLR types are supported. Numeric/DateTime/decimal/JSON types are on the v0.3 roadmap.
 - No cloud KMS providers yet (AWS, Azure, GCP, HashiCorp, DPAPI). All planned for v0.2 / v0.4 roadmap.
 
-[Unreleased]: https://github.com/tunahanaliozturk/OrionVault/compare/v0.2.22...HEAD
+[Unreleased]: https://github.com/tunahanaliozturk/OrionVault/compare/v0.2.23...HEAD
+[0.2.23]: https://github.com/tunahanaliozturk/OrionVault/releases/tag/v0.2.23
 [0.2.22]: https://github.com/tunahanaliozturk/OrionVault/releases/tag/v0.2.22
 [0.2.21]: https://github.com/tunahanaliozturk/OrionVault/releases/tag/v0.2.21
 [0.2.20]: https://github.com/tunahanaliozturk/OrionVault/releases/tag/v0.2.20
