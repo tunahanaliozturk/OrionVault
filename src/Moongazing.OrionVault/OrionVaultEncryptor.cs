@@ -33,9 +33,22 @@ public static class OrionVaultEncryptor
     /// observation works the same as the default global encryptor.
     /// </summary>
     public static IEncryptor Create(IKeyProvider keys, OrionVaultDiagnostics diagnostics, IDecryptionFailureHandler? failureHandler)
+        => Create(keys, diagnostics, failureHandler, auditObserver: null);
+
+    /// <summary>
+    /// v0.2.23 overload that wires the optional <see cref="IEncryptionAuditObserver"/>
+    /// alongside the failure handler for keyed-provider scenarios. Mirrors the
+    /// 4-arg <see cref="Internal.AesGcmEncryptor"/> ctor so factory-built encryptors
+    /// (named-provider EF Core path) get the same hook surface as DI-built ones.
+    /// </summary>
+    public static IEncryptor Create(
+        IKeyProvider keys,
+        OrionVaultDiagnostics diagnostics,
+        IDecryptionFailureHandler? failureHandler,
+        IEncryptionAuditObserver? auditObserver)
     {
         ArgumentNullException.ThrowIfNull(keys);
         ArgumentNullException.ThrowIfNull(diagnostics);
-        return new AesGcmEncryptor(keys, diagnostics, failureHandler);
+        return new AesGcmEncryptor(keys, diagnostics, failureHandler, auditObserver);
     }
 }

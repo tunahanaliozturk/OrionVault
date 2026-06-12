@@ -15,20 +15,70 @@ internal sealed class AesGcmEncryptor : IEncryptor
     // v0.2.19 optional consumer-supplied failure observer. Null when no handler is
     // registered; the encryptor treats null as no-op.
     private readonly Abstractions.IDecryptionFailureHandler? _failureHandler;
+    // v0.2.23 optional consumer-registered audit observer. Null and
+    // NullEncryptionAuditObserver are both treated as 'no observer'.
+    private readonly Abstractions.IEncryptionAuditObserver? _auditObserver;
 
     public AesGcmEncryptor(IKeyProvider keys, OrionVaultDiagnostics diag)
-        : this(keys, diag, failureHandler: null)
+        : this(keys, diag, failureHandler: null, auditObserver: null)
     {
     }
 
     /// <summary>v0.2.19 ctor overload that wires the optional <see cref="Abstractions.IDecryptionFailureHandler"/>.</summary>
     public AesGcmEncryptor(IKeyProvider keys, OrionVaultDiagnostics diag, Abstractions.IDecryptionFailureHandler? failureHandler)
+        : this(keys, diag, failureHandler, auditObserver: null)
+    {
+    }
+
+    /// <summary>v0.2.23 ctor overload that also wires the optional <see cref="Abstractions.IEncryptionAuditObserver"/>.</summary>
+    public AesGcmEncryptor(
+        IKeyProvider keys,
+        OrionVaultDiagnostics diag,
+        Abstractions.IDecryptionFailureHandler? failureHandler,
+        Abstractions.IEncryptionAuditObserver? auditObserver)
     {
         ArgumentNullException.ThrowIfNull(keys);
         ArgumentNullException.ThrowIfNull(diag);
         _keys = keys;
         _diag = diag;
         _failureHandler = failureHandler is Abstractions.NullDecryptionFailureHandler ? null : failureHandler;
+        _auditObserver = auditObserver is Abstractions.NullEncryptionAuditObserver ? null : auditObserver;
+    }
+
+    private void InvokeAuditEncrypted(short keyId, int plaintextLength, int ciphertextLength)
+    {
+        if (_auditObserver is null)
+        {
+            return;
+        }
+        try
+        {
+            _auditObserver.OnEncrypted(keyId, plaintextLength, ciphertextLength);
+        }
+#pragma warning disable CA1031
+        catch
+#pragma warning restore CA1031
+        {
+            // Audit observer faults must not affect the cryptographic path.
+        }
+    }
+
+    private void InvokeAuditDecrypted(short keyId, int ciphertextLength, int plaintextLength)
+    {
+        if (_auditObserver is null)
+        {
+            return;
+        }
+        try
+        {
+            _auditObserver.OnDecrypted(keyId, ciphertextLength, plaintextLength);
+        }
+#pragma warning disable CA1031
+        catch
+#pragma warning restore CA1031
+        {
+            // Audit observer faults must not affect the cryptographic path.
+        }
     }
 
     private void InvokeFailureHandler(string reason, short keyId, System.Exception exception)
@@ -97,6 +147,8 @@ internal sealed class AesGcmEncryptor : IEncryptor
             // because the underlying type is int and small messages dominate; consumers
             // can apply downstream rebucketing if needed.
             _diag.EncryptionPayloadSize.Record(plaintext.Length);
+            // v0.2.23: audit observer notified after success, before return.
+            InvokeAuditEncrypted(keyId, plaintext.Length, output.Length);
             return output;
         }
         finally
@@ -153,6 +205,8 @@ internal sealed class AesGcmEncryptor : IEncryptor
             // v0.2.18: record decrypted plaintext size to mirror the v0.2.17 encrypt
             // histogram so operators see both directions on one dashboard.
             _diag.DecryptionPayloadSize.Record(plaintext.Length);
+            // v0.2.23: audit observer notified after success, before return.
+            InvokeAuditDecrypted(keyId, ciphertext.Length, plaintext.Length);
             activity?.SetTag("outcome", "success");
             return plaintext;
         }
