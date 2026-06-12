@@ -25,6 +25,7 @@ public sealed class OrionVaultDiagnostics : IDisposable
     internal Histogram<double> RotationCycleDuration { get; }
     internal Histogram<int> EncryptionPayloadSize { get; }
     internal Histogram<int> DecryptionPayloadSize { get; }
+    internal Counter<long> LegacyKeyUsedOnDecrypt { get; }
     internal Histogram<double> KeyResolutionDuration { get; }
 
     // v0.2.15 last-cycle snapshot, fed by EncryptionRotationHostedService at the end of
@@ -102,6 +103,16 @@ public sealed class OrionVaultDiagnostics : IDisposable
         DecryptionPayloadSize = Meter.CreateHistogram<int>(
             "orionvault.decryption.payload_size_bytes", "By",
             "Plaintext size per decrypt operation in bytes.");
+        // v0.2.24 legacy-key-used counter. Increments when a decrypt operation
+        // resolves an OLDER key id than the currently configured ActiveKeyId.
+        // Operators graph the RATE to see rotation progress: a steadily falling rate
+        // means rows are being re-encrypted to the new active key (by the rotation
+        // sweep or natural write traffic); a flat rate means rotation has stalled.
+        // Tagged with the actual key_id used so operators can identify WHICH legacy
+        // key has the most outstanding ciphertexts.
+        LegacyKeyUsedOnDecrypt = Meter.CreateCounter<long>(
+            "orionvault.decryption.legacy_key_used", "{operations}",
+            "Decrypt operations that resolved a non-active (legacy) key id.");
         // v0.2.21 distribution of IKeyProvider.TryGetKey wall-clock per call. Operators
         // graph p99 to spot a key provider whose backend (Key Vault, KMS, database) has
         // regressed - the encryption.duration histogram captures the full round-trip

@@ -205,6 +205,16 @@ internal sealed class AesGcmEncryptor : IEncryptor
             // v0.2.18: record decrypted plaintext size to mirror the v0.2.17 encrypt
             // histogram so operators see both directions on one dashboard.
             _diag.DecryptionPayloadSize.Record(plaintext.Length);
+            // v0.2.24: increment legacy-key counter when the decrypt resolved an older
+            // key id than the current active one. Operators graph the rate to track
+            // rotation progress (falling rate = rotation sweep + write traffic
+            // re-encrypting rows to the new active key).
+            if (keyId != _keys.ActiveKeyId)
+            {
+                _diag.LegacyKeyUsedOnDecrypt.Add(1,
+                    new KeyValuePair<string, object?>("key_id", keyId),
+                    new KeyValuePair<string, object?>("active_key_id", _keys.ActiveKeyId));
+            }
             // v0.2.23: audit observer notified after success, before return.
             InvokeAuditDecrypted(keyId, ciphertext.Length, plaintext.Length);
             activity?.SetTag("outcome", "success");

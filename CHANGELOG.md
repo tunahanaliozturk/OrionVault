@@ -4,6 +4,27 @@ All notable changes to OrionVault are recorded here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.2.24] - 2026-06-12
+
+### Added
+
+#### `orionvault.decryption.legacy_key_used` counter
+
+`Counter<long>` increments when a decrypt operation resolves a non-active (legacy) key id. Operators graph the rate to track rotation progress:
+
+- Steadily falling rate = rows are being re-encrypted to the new active key (by the rotation sweep or natural write traffic).
+- Flat / rising rate = rotation has stalled OR new ciphertexts are being created under a legacy key (configuration drift).
+
+Tagged with `key_id` (the legacy key id actually used) and `active_key_id` so operators can identify WHICH legacy key has the most outstanding ciphertexts and target re-encryption priority.
+
+### Tests
+
+2 facts.
+
+### Migration from v0.2.23
+
+Source-compatible.
+
 ## [0.2.23] - 2026-06-12
 
 ### Added
@@ -653,7 +674,8 @@ Replace `<PackageReference Include="Moongazing.OrionVault" Version="0.1.1" />` w
 - Only `string` and `byte[]` CLR types are supported. Numeric/DateTime/decimal/JSON types are on the v0.3 roadmap.
 - No cloud KMS providers yet (AWS, Azure, GCP, HashiCorp, DPAPI). All planned for v0.2 / v0.4 roadmap.
 
-[Unreleased]: https://github.com/tunahanaliozturk/OrionVault/compare/v0.2.23...HEAD
+[Unreleased]: https://github.com/tunahanaliozturk/OrionVault/compare/v0.2.24...HEAD
+[0.2.24]: https://github.com/tunahanaliozturk/OrionVault/releases/tag/v0.2.24
 [0.2.23]: https://github.com/tunahanaliozturk/OrionVault/releases/tag/v0.2.23
 [0.2.22]: https://github.com/tunahanaliozturk/OrionVault/releases/tag/v0.2.22
 [0.2.21]: https://github.com/tunahanaliozturk/OrionVault/releases/tag/v0.2.21
