@@ -714,7 +714,9 @@ Replace `<PackageReference Include="Moongazing.OrionVault" Version="0.1.1" />` w
 - Only `string` and `byte[]` CLR types are supported. Numeric/DateTime/decimal/JSON types are on the v0.3 roadmap.
 - No cloud KMS providers yet (AWS, Azure, GCP, HashiCorp, DPAPI). All planned for v0.2 / v0.4 roadmap.
 
-[Unreleased]: https://github.com/tunahanaliozturk/OrionVault/compare/v0.2.24...HEAD
+[Unreleased]: https://github.com/tunahanaliozturk/OrionVault/compare/v0.2.26...HEAD
+[0.2.26]: https://github.com/tunahanaliozturk/OrionVault/releases/tag/v0.2.26
+[0.2.25]: https://github.com/tunahanaliozturk/OrionVault/releases/tag/v0.2.25
 [0.2.24]: https://github.com/tunahanaliozturk/OrionVault/releases/tag/v0.2.24
 [0.2.23]: https://github.com/tunahanaliozturk/OrionVault/releases/tag/v0.2.23
 [0.2.22]: https://github.com/tunahanaliozturk/OrionVault/releases/tag/v0.2.22

@@ -168,10 +168,23 @@ internal sealed class AesGcmEncryptor : IEncryptor
             activity?.SetTag("outcome", "key_not_found");
             throw;
         }
+        catch (OrionVaultConfigurationException)
+        {
+            // v0.2.26 fix (codex P2): a non-32-byte active key throws
+            // OrionVaultConfigurationException from LookupKey BEFORE the AesGcm ctor, so
+            // the CryptographicException catch below never sees it. Bad key length is
+            // exactly the "crypto_error" the changelog advertises and every write fails,
+            // so count it here.
+            _diag.EncryptionFailures.Add(1,
+                new KeyValuePair<string, object?>("reason", "crypto_error"),
+                new KeyValuePair<string, object?>("key_id", keyId));
+            activity?.SetTag("outcome", "crypto_error");
+            throw;
+        }
         catch (CryptographicException)
         {
-            // v0.2.26: the AES-GCM operation itself failed (e.g. bad key length slipped
-            // past validation, platform crypto fault). Rare but write-blocking.
+            // v0.2.26: the AES-GCM operation itself failed (platform crypto fault). Rare
+            // but write-blocking.
             _diag.EncryptionFailures.Add(1,
                 new KeyValuePair<string, object?>("reason", "crypto_error"),
                 new KeyValuePair<string, object?>("key_id", keyId));
