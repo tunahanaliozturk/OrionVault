@@ -46,7 +46,7 @@ public sealed class RegisteredKeyCountGaugeTests
         _ = sp.GetRequiredService<IEncryptor>();
         listener.RecordObservableInstruments();
 
-        Assert.True(System.Threading.Interlocked.Read(ref observed) >= 3);
+        Assert.Equal(3, System.Threading.Interlocked.Read(ref observed));
     }
 
     [Fact]

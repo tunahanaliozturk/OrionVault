@@ -43,6 +43,13 @@ internal sealed class AesGcmEncryptor : IEncryptor
         _diag = diag;
         _failureHandler = failureHandler is Abstractions.NullDecryptionFailureHandler ? null : failureHandler;
         _auditObserver = auditObserver is Abstractions.NullEncryptionAuditObserver ? null : auditObserver;
+        // v0.2.25 fix (codex P2): snapshot the registered key count HERE in the common
+        // ctor rather than in the AddOrionVault DI factory, so the keyed-provider path
+        // (OrionVaultEncryptor.Create used by UseEntityFrameworkCore(providerName)) and
+        // the public factory also populate orionvault.keys.registered_count. Every
+        // IEncryptor construction now updates the gauge, matching the documented
+        // 'snapshot at IEncryptor construction' contract.
+        diag.SetRegisteredKeyCountSnapshot(keys.KeyCount);
     }
 
     private void InvokeAuditEncrypted(short keyId, int plaintextLength, int ciphertextLength)

@@ -40,9 +40,21 @@ public sealed class OrionVaultDiagnostics : IDisposable
     // from IKeyProvider.KeyCount. -1 = provider cannot enumerate; 0 = no snapshot yet.
     private long registeredKeyCount;
 
-    /// <summary>v0.2.25: snapshot the active provider's registered key count.</summary>
+    /// <summary>
+    /// v0.2.25: snapshot the active provider's registered key count. Valid values are
+    /// <c>-1</c> (provider cannot enumerate) or <c>&gt;= 0</c>.
+    /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException">When <paramref name="count"/> is below -1.</exception>
     public void SetRegisteredKeyCountSnapshot(int count)
-        => Interlocked.Exchange(ref registeredKeyCount, count);
+    {
+        // v0.2.25 fix (coderabbit minor): enforce the documented value domain so an
+        // out-of-range count cannot leak an invalid telemetry state.
+        if (count < -1)
+        {
+            throw new ArgumentOutOfRangeException(nameof(count), count, "Key count must be -1 (not enumerable) or >= 0.");
+        }
+        Interlocked.Exchange(ref registeredKeyCount, count);
+    }
     // v0.2.22 active key id snapshot, fed by SetActiveKeyIdSnapshot at startup (and on
     // every key provider refresh if the host wires it). 0 until first set; operators
     // graph the gauge as 'right-now which key is the active write key' so a stale
