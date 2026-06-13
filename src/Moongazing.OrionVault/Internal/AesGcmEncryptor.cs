@@ -158,6 +158,39 @@ internal sealed class AesGcmEncryptor : IEncryptor
             InvokeAuditEncrypted(keyId, plaintext.Length, output.Length);
             return output;
         }
+        catch (OrionVaultKeyNotFoundException)
+        {
+            // v0.2.26: the active key id is not registered - encryption cannot proceed.
+            // More severe than a decrypt key-not-found because it blocks writes.
+            _diag.EncryptionFailures.Add(1,
+                new KeyValuePair<string, object?>("reason", "key_not_found"),
+                new KeyValuePair<string, object?>("key_id", keyId));
+            activity?.SetTag("outcome", "key_not_found");
+            throw;
+        }
+        catch (OrionVaultConfigurationException)
+        {
+            // v0.2.26 fix (codex P2): a non-32-byte active key throws
+            // OrionVaultConfigurationException from LookupKey BEFORE the AesGcm ctor, so
+            // the CryptographicException catch below never sees it. Bad key length is
+            // exactly the "crypto_error" the changelog advertises and every write fails,
+            // so count it here.
+            _diag.EncryptionFailures.Add(1,
+                new KeyValuePair<string, object?>("reason", "crypto_error"),
+                new KeyValuePair<string, object?>("key_id", keyId));
+            activity?.SetTag("outcome", "crypto_error");
+            throw;
+        }
+        catch (CryptographicException)
+        {
+            // v0.2.26: the AES-GCM operation itself failed (platform crypto fault). Rare
+            // but write-blocking.
+            _diag.EncryptionFailures.Add(1,
+                new KeyValuePair<string, object?>("reason", "crypto_error"),
+                new KeyValuePair<string, object?>("key_id", keyId));
+            activity?.SetTag("outcome", "crypto_error");
+            throw;
+        }
         finally
         {
             _diag.Duration.Record(Stopwatch.GetElapsedTime(sw).TotalMilliseconds,

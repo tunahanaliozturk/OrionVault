@@ -4,6 +4,26 @@ All notable changes to OrionVault are recorded here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.2.26] - 2026-06-13
+
+### Added
+
+#### `orionvault.encryption.failures` counter
+
+`Counter<long>` mirroring the existing `decryption.failures` counter on the encrypt side. Encrypt can fail on key resolution (`key_not_found`) or the AES-GCM operation itself (`crypto_error`). Operators alert on the rate - an encrypt failure is MORE severe than a decrypt failure because it blocks WRITES (data cannot be persisted) rather than reads.
+
+- Tags: `reason` (`key_not_found` / `crypto_error`) and `key_id`.
+- The exception still propagates to the caller after the counter increments.
+- Recorded in `AesGcmEncryptor.EncryptInternal` catch blocks; the `Duration` finally still fires.
+
+### Tests
+
+1 fact.
+
+### Migration from v0.2.25
+
+Source-compatible.
+
 ## [0.2.25] - 2026-06-12
 
 ### Added
@@ -694,7 +714,9 @@ Replace `<PackageReference Include="Moongazing.OrionVault" Version="0.1.1" />` w
 - Only `string` and `byte[]` CLR types are supported. Numeric/DateTime/decimal/JSON types are on the v0.3 roadmap.
 - No cloud KMS providers yet (AWS, Azure, GCP, HashiCorp, DPAPI). All planned for v0.2 / v0.4 roadmap.
 
-[Unreleased]: https://github.com/tunahanaliozturk/OrionVault/compare/v0.2.24...HEAD
+[Unreleased]: https://github.com/tunahanaliozturk/OrionVault/compare/v0.2.26...HEAD
+[0.2.26]: https://github.com/tunahanaliozturk/OrionVault/releases/tag/v0.2.26
+[0.2.25]: https://github.com/tunahanaliozturk/OrionVault/releases/tag/v0.2.25
 [0.2.24]: https://github.com/tunahanaliozturk/OrionVault/releases/tag/v0.2.24
 [0.2.23]: https://github.com/tunahanaliozturk/OrionVault/releases/tag/v0.2.23
 [0.2.22]: https://github.com/tunahanaliozturk/OrionVault/releases/tag/v0.2.22
