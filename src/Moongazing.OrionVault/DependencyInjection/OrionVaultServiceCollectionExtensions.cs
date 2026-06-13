@@ -50,6 +50,9 @@ public static class OrionVaultServiceCollectionExtensions
             sp.GetRequiredService<Diagnostics.OrionVaultDiagnostics>(),
             sp.GetService<IDecryptionFailureHandler>(),
             sp.GetService<IEncryptionAuditObserver>()));
+        // v0.2.25 (codex P2): the registered-key-count snapshot now happens inside the
+        // AesGcmEncryptor ctor so EVERY construction path (DI, keyed-provider factory,
+        // public factory) populates the gauge - not just this DI registration.
 
         return new OrionVaultBuilder(services);
     }

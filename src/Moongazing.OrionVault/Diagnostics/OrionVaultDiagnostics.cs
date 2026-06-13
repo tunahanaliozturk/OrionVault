@@ -36,6 +36,25 @@ public sealed class OrionVaultDiagnostics : IDisposable
     private long lastCycleSkipped;
     private long lastCycleErrors;
     private long lastCycleAtUnixSeconds;
+    // v0.2.25 registered key count snapshot. Set once at IEncryptor construction
+    // from IKeyProvider.KeyCount. -1 = provider cannot enumerate; 0 = no snapshot yet.
+    private long registeredKeyCount;
+
+    /// <summary>
+    /// v0.2.25: snapshot the active provider's registered key count. Valid values are
+    /// <c>-1</c> (provider cannot enumerate) or <c>&gt;= 0</c>.
+    /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException">When <paramref name="count"/> is below -1.</exception>
+    public void SetRegisteredKeyCountSnapshot(int count)
+    {
+        // v0.2.25 fix (coderabbit minor): enforce the documented value domain so an
+        // out-of-range count cannot leak an invalid telemetry state.
+        if (count < -1)
+        {
+            throw new ArgumentOutOfRangeException(nameof(count), count, "Key count must be -1 (not enumerable) or >= 0.");
+        }
+        Interlocked.Exchange(ref registeredKeyCount, count);
+    }
     // v0.2.22 active key id snapshot, fed by SetActiveKeyIdSnapshot at startup (and on
     // every key provider refresh if the host wires it). 0 until first set; operators
     // graph the gauge as 'right-now which key is the active write key' so a stale
@@ -103,6 +122,13 @@ public sealed class OrionVaultDiagnostics : IDisposable
         DecryptionPayloadSize = Meter.CreateHistogram<int>(
             "orionvault.decryption.payload_size_bytes", "By",
             "Plaintext size per decrypt operation in bytes.");
+        // v0.2.25 registered-key-count gauge. Snapshot set once at IEncryptor
+        // construction from IKeyProvider.KeyCount; -1 = provider cannot enumerate
+        // (remote KMS), 0 = no snapshot yet. Operators compare against their key
+        // rotation policy to confirm old keys are eventually retired from config.
+        _ = Meter.CreateObservableGauge<long>("orionvault.keys.registered_count",
+            () => Interlocked.Read(ref registeredKeyCount),
+            "{keys}", "Number of keys registered in the active IKeyProvider (-1 when not enumerable).");
         // v0.2.24 legacy-key-used counter. Increments when a decrypt operation
         // resolves an OLDER key id than the currently configured ActiveKeyId.
         // Operators graph the RATE to see rotation progress: a steadily falling rate
