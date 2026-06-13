@@ -14,6 +14,9 @@ internal sealed class StaticKeyProvider : IKeyProvider
 
     public short ActiveKeyId { get; }
 
+    // v0.2.25: static providers know their exact registration count.
+    public int KeyCount => _keys.Count;
+
     public ReadOnlyMemory<byte>? TryGetKey(short keyId)
     {
         if (_keys.TryGetValue(keyId, out var k)) return k;

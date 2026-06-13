@@ -19,4 +19,12 @@ public interface IKeyProvider
     /// The returned memory must be exactly 32 bytes.
     /// </summary>
     ReadOnlyMemory<byte>? TryGetKey(short keyId);
+
+    /// <summary>
+    /// v0.2.25: number of registered keys, or <c>-1</c> when the provider cannot
+    /// enumerate (remote KMS-style providers). Default interface implementation
+    /// returns <c>-1</c> so existing custom providers compile unchanged. Feeds the
+    /// <c>orionvault.keys.registered_count</c> gauge.
+    /// </summary>
+    int KeyCount => -1;
 }

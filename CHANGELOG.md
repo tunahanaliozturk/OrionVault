@@ -4,6 +4,26 @@ All notable changes to OrionVault are recorded here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.2.25] - 2026-06-12
+
+### Added
+
+#### `orionvault.keys.registered_count` ObservableGauge
+
+`ObservableGauge<long>` reports the number of keys registered in the active `IKeyProvider`. Operators compare against their key rotation policy to confirm old keys are eventually retired from configuration (a steadily growing count means retired keys are never being removed).
+
+- `IKeyProvider` gains a `KeyCount` member with a default interface implementation returning `-1` (provider cannot enumerate, e.g. remote KMS) - existing custom providers compile unchanged.
+- `StaticKeyProvider` reports its exact dictionary count.
+- Snapshot taken once at `IEncryptor` construction; `0` until the encryptor is first resolved.
+
+### Tests
+
+2 facts.
+
+### Migration from v0.2.24
+
+Source-compatible (DIM default keeps custom IKeyProvider implementations compiling).
+
 ## [0.2.24] - 2026-06-12
 
 ### Added

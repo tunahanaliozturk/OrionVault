@@ -45,11 +45,19 @@ public static class OrionVaultServiceCollectionExtensions
         // IEncryptionAuditObserver) are wired independently. ActivatorUtilities longest-
         // ctor pick would silently drop one hook when only the other is registered -
         // same trap as the v0.2.20 OrionPatch P1.
-        services.AddSingleton<IEncryptor>(sp => new Internal.AesGcmEncryptor(
-            sp.GetRequiredService<IKeyProvider>(),
-            sp.GetRequiredService<Diagnostics.OrionVaultDiagnostics>(),
-            sp.GetService<IDecryptionFailureHandler>(),
-            sp.GetService<IEncryptionAuditObserver>()));
+        services.AddSingleton<IEncryptor>(sp =>
+        {
+            var keys = sp.GetRequiredService<IKeyProvider>();
+            var diag = sp.GetRequiredService<Diagnostics.OrionVaultDiagnostics>();
+            // v0.2.25: snapshot the provider's registered key count for the
+            // orionvault.keys.registered_count gauge. -1 = provider cannot enumerate.
+            diag.SetRegisteredKeyCountSnapshot(keys.KeyCount);
+            return new Internal.AesGcmEncryptor(
+                keys,
+                diag,
+                sp.GetService<IDecryptionFailureHandler>(),
+                sp.GetService<IEncryptionAuditObserver>());
+        });
 
         return new OrionVaultBuilder(services);
     }
