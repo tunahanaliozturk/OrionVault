@@ -26,6 +26,7 @@ public sealed class OrionVaultDiagnostics : IDisposable
     internal Histogram<int> EncryptionPayloadSize { get; }
     internal Histogram<int> DecryptionPayloadSize { get; }
     internal Counter<long> LegacyKeyUsedOnDecrypt { get; }
+    internal Counter<long> EncryptionFailures { get; }
     internal Histogram<double> KeyResolutionDuration { get; }
 
     // v0.2.15 last-cycle snapshot, fed by EncryptionRotationHostedService at the end of
@@ -87,6 +88,13 @@ public sealed class OrionVaultDiagnostics : IDisposable
             "Number of decryption operations performed.");
         DecryptionFailures = Meter.CreateCounter<long>("orionvault.decryption.failures", "{operations}",
             "Number of failed decryptions, tagged by reason.");
+        // v0.2.26 encrypt-side failure counter, mirroring the decryption.failures
+        // counter. Encrypt can fail on key resolution (key_not_found) or the AES
+        // operation itself (crypto_error). Operators alert on the rate; an encrypt
+        // failure is more severe than a decrypt failure because it blocks WRITES
+        // (data cannot be persisted) rather than reads.
+        EncryptionFailures = Meter.CreateCounter<long>("orionvault.encryption.failures", "{operations}",
+            "Number of failed encryptions, tagged by reason.");
         KeyLookups = Meter.CreateCounter<long>("orionvault.key_lookups", "{operations}",
             "Number of key lookups performed against the IKeyProvider.");
         KeyNotFound = Meter.CreateCounter<long>("orionvault.key_not_found", "{operations}",

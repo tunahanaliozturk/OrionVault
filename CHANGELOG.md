@@ -4,6 +4,26 @@ All notable changes to OrionVault are recorded here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.2.26] - 2026-06-13
+
+### Added
+
+#### `orionvault.encryption.failures` counter
+
+`Counter<long>` mirroring the existing `decryption.failures` counter on the encrypt side. Encrypt can fail on key resolution (`key_not_found`) or the AES-GCM operation itself (`crypto_error`). Operators alert on the rate - an encrypt failure is MORE severe than a decrypt failure because it blocks WRITES (data cannot be persisted) rather than reads.
+
+- Tags: `reason` (`key_not_found` / `crypto_error`) and `key_id`.
+- The exception still propagates to the caller after the counter increments.
+- Recorded in `AesGcmEncryptor.EncryptInternal` catch blocks; the `Duration` finally still fires.
+
+### Tests
+
+1 fact.
+
+### Migration from v0.2.25
+
+Source-compatible.
+
 ## [0.2.25] - 2026-06-12
 
 ### Added

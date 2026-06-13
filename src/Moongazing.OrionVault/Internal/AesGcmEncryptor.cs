@@ -158,6 +158,26 @@ internal sealed class AesGcmEncryptor : IEncryptor
             InvokeAuditEncrypted(keyId, plaintext.Length, output.Length);
             return output;
         }
+        catch (OrionVaultKeyNotFoundException)
+        {
+            // v0.2.26: the active key id is not registered - encryption cannot proceed.
+            // More severe than a decrypt key-not-found because it blocks writes.
+            _diag.EncryptionFailures.Add(1,
+                new KeyValuePair<string, object?>("reason", "key_not_found"),
+                new KeyValuePair<string, object?>("key_id", keyId));
+            activity?.SetTag("outcome", "key_not_found");
+            throw;
+        }
+        catch (CryptographicException)
+        {
+            // v0.2.26: the AES-GCM operation itself failed (e.g. bad key length slipped
+            // past validation, platform crypto fault). Rare but write-blocking.
+            _diag.EncryptionFailures.Add(1,
+                new KeyValuePair<string, object?>("reason", "crypto_error"),
+                new KeyValuePair<string, object?>("key_id", keyId));
+            activity?.SetTag("outcome", "crypto_error");
+            throw;
+        }
         finally
         {
             _diag.Duration.Record(Stopwatch.GetElapsedTime(sw).TotalMilliseconds,
