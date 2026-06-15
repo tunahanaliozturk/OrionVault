@@ -18,6 +18,7 @@ public sealed class OrionVaultDiagnostics : IDisposable
     internal Counter<long> KeyLookups { get; }
     internal Counter<long> KeyNotFound { get; }
     internal Histogram<double> Duration { get; }
+    internal Histogram<double> DecryptionDuration { get; }
     internal Counter<long> ReEncryptionRowsProcessed { get; }
     internal Histogram<double> ReEncryptionBatchDuration { get; }
     internal Counter<long> RotationRowsRotated { get; }
@@ -109,7 +110,13 @@ public sealed class OrionVaultDiagnostics : IDisposable
         KeyNotFound = Meter.CreateCounter<long>("orionvault.key_not_found", "{operations}",
             "Number of times the IKeyProvider returned null for a key id.");
         Duration = Meter.CreateHistogram<double>("orionvault.encryption.duration_ms", "ms",
-            "Duration of encrypt/decrypt operations.");
+            "Duration of encrypt operations (decrypt latency moved to orionvault.decryption.duration_ms in v0.2.28).");
+        // v0.2.28 dedicated decrypt-latency histogram. The v0.2.x encryption.duration_ms above
+        // only ever received encrypt samples; decrypt latency was unmeasured. This mirrors it on
+        // the decrypt side so operators can graph p99 decrypt latency (key resolution + AES-GCM
+        // verify + plaintext copy) independently and spot a slow-decrypt regression.
+        DecryptionDuration = Meter.CreateHistogram<double>("orionvault.decryption.duration_ms", "ms",
+            "Duration of decrypt operations (success and failure).");
         ReEncryptionRowsProcessed = Meter.CreateCounter<long>("orionvault.reencryption.rows_processed", "{rows}",
             "Number of rows re-encrypted by the background re-encryption service.");
         ReEncryptionBatchDuration = Meter.CreateHistogram<double>("orionvault.reencryption.batch_duration_ms", "ms",
