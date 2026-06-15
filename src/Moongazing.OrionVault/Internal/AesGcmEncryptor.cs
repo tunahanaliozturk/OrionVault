@@ -279,9 +279,11 @@ internal sealed class AesGcmEncryptor : IEncryptor
         }
         finally
         {
-            _diag.Duration.Record(Stopwatch.GetElapsedTime(sw).TotalMilliseconds,
-                new KeyValuePair<string, object?>("algorithm", "aes-gcm-256"),
-                new KeyValuePair<string, object?>("operation", "decrypt"));
+            // v0.2.28: decrypt latency now lands on the correctly-named decryption.duration_ms
+            // histogram instead of being mixed into encryption.duration_ms under an
+            // operation=decrypt tag. try/finally so both success and failure paths emit a sample.
+            _diag.DecryptionDuration.Record(Stopwatch.GetElapsedTime(sw).TotalMilliseconds,
+                new KeyValuePair<string, object?>("algorithm", "aes-gcm-256"));
         }
     }
 

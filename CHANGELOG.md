@@ -4,6 +4,28 @@ All notable changes to OrionVault are recorded here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.2.28] - 2026-06-15
+
+### Added
+
+#### `orionvault.decryption.duration_ms` histogram
+
+`Histogram<double>` records the wall-clock of each decrypt operation (key resolution + AES-GCM verify + plaintext copy), on both the success and failure paths. It mirrors the existing `orionvault.encryption.duration_ms` on the decrypt side, so operators can graph p99 decrypt latency independently and spot a slow-decrypt regression.
+
+- Tag: `algorithm` (`aes-gcm-256`).
+
+### Changed
+
+- Decrypt latency now lands on the correctly-named `decryption.duration_ms` histogram instead of being mixed into `encryption.duration_ms` under an `operation=decrypt` tag. The `encryption.duration_ms` histogram now receives only encrypt samples. If you were graphing `encryption.duration_ms{operation=decrypt}`, switch to `decryption.duration_ms`.
+
+### Fixed
+
+- `LegacyKeyUsedCounterTests` filtered its `MeterListener` by meter **name** and asserted exact counts, so a parallel test that decrypted a legacy-key ciphertext could pollute the count and flake the suite. The tests now filter by the specific `OrionVaultDiagnostics.Meter` instance (reference equality), matching the v0.2.27 `AuthTagFailuresCounterTests` isolation. Verified stable across repeated full-suite runs.
+
+### Tests
+
+- `DecryptionDurationHistogramTests`: a successful decrypt and a tampered (failing) decrypt each record a duration sample.
+
 ## [0.2.27] - 2026-06-15
 
 ### Added
@@ -729,7 +751,8 @@ Replace `<PackageReference Include="Moongazing.OrionVault" Version="0.1.1" />` w
 - Only `string` and `byte[]` CLR types are supported. Numeric/DateTime/decimal/JSON types are on the v0.3 roadmap.
 - No cloud KMS providers yet (AWS, Azure, GCP, HashiCorp, DPAPI). All planned for v0.2 / v0.4 roadmap.
 
-[Unreleased]: https://github.com/tunahanaliozturk/OrionVault/compare/v0.2.27...HEAD
+[Unreleased]: https://github.com/tunahanaliozturk/OrionVault/compare/v0.2.28...HEAD
+[0.2.28]: https://github.com/tunahanaliozturk/OrionVault/releases/tag/v0.2.28
 [0.2.27]: https://github.com/tunahanaliozturk/OrionVault/releases/tag/v0.2.27
 [0.2.26]: https://github.com/tunahanaliozturk/OrionVault/releases/tag/v0.2.26
 [0.2.25]: https://github.com/tunahanaliozturk/OrionVault/releases/tag/v0.2.25
