@@ -1,10 +1,8 @@
 namespace Moongazing.OrionVault.Tests;
 
 using System.Diagnostics.Metrics;
-using Microsoft.Extensions.DependencyInjection;
 using Moongazing.OrionVault;
 using Moongazing.OrionVault.Abstractions;
-using Moongazing.OrionVault.DependencyInjection;
 using Moongazing.OrionVault.Diagnostics;
 using Moongazing.OrionVault.Exceptions;
 using Xunit;
@@ -13,25 +11,25 @@ public sealed class AuthTagFailuresCounterTests
 {
     private const string InstrumentName = "orionvault.decryption.auth_tag_failures";
 
-    private static (IEncryptor Encryptor, ServiceProvider Sp) BuildEncryptor()
+    // A single registered 32-byte key so encrypt/decrypt round-trips.
+    private sealed class SingleKeyProvider : IKeyProvider
     {
-        var services = new ServiceCollection();
-        services.AddOrionVault(o =>
-        {
-            o.UseStaticKeys(k => k.Add(1, System.Convert.ToBase64String(
-                System.Security.Cryptography.RandomNumberGenerator.GetBytes(32))));
-            o.ActiveKeyId = 1;
-        });
-        var sp = services.BuildServiceProvider();
-        return (sp.GetRequiredService<IEncryptor>(), sp);
+        private readonly byte[] _key = System.Security.Cryptography.RandomNumberGenerator.GetBytes(32);
+        public short ActiveKeyId => 1;
+        public int KeyCount => 1;
+        public System.ReadOnlyMemory<byte>? TryGetKey(short keyId)
+            => keyId == 1 ? _key : (System.ReadOnlyMemory<byte>?)null;
     }
 
-    private static MeterListener StartListener(System.Action<long> add)
+    // Filter to THIS diagnostics instance's Meter (reference equality), not the meter NAME, so a
+    // parallel test emitting the same instrument on a different OrionVaultDiagnostics cannot
+    // pollute the count. This makes the exact-count assertions reliable under xUnit parallelism.
+    private static MeterListener StartIsolatedListener(OrionVaultDiagnostics diag, System.Action<long> add)
     {
         var listener = new MeterListener();
         listener.InstrumentPublished = (instrument, l) =>
         {
-            if (instrument.Meter.Name == OrionVaultDiagnostics.MeterName && instrument.Name == InstrumentName)
+            if (ReferenceEquals(instrument.Meter, diag.Meter) && instrument.Name == InstrumentName)
             {
                 l.EnableMeasurementEvents(instrument);
             }
@@ -44,12 +42,11 @@ public sealed class AuthTagFailuresCounterTests
     [Fact]
     public void Tampered_ciphertext_increments_auth_tag_failures()
     {
+        using var diag = new OrionVaultDiagnostics();
         long total = 0;
-        using var listener = StartListener(v => System.Threading.Interlocked.Add(ref total, v));
+        using var listener = StartIsolatedListener(diag, v => System.Threading.Interlocked.Add(ref total, v));
 
-        var (encryptor, sp) = BuildEncryptor();
-        using var _ = sp;
-
+        var encryptor = OrionVaultEncryptor.Create(new SingleKeyProvider(), diag);
         var ciphertext = encryptor.EncryptBytes(new byte[] { 1, 2, 3 });
         // Flip a byte in the tag region so AES-GCM authentication fails.
         ciphertext[ciphertext.Length - 1] ^= 0xff;
@@ -61,12 +58,11 @@ public sealed class AuthTagFailuresCounterTests
     [Fact]
     public void A_valid_decrypt_does_not_increment_auth_tag_failures()
     {
+        using var diag = new OrionVaultDiagnostics();
         long total = 0;
-        using var listener = StartListener(v => System.Threading.Interlocked.Add(ref total, v));
+        using var listener = StartIsolatedListener(diag, v => System.Threading.Interlocked.Add(ref total, v));
 
-        var (encryptor, sp) = BuildEncryptor();
-        using var _ = sp;
-
+        var encryptor = OrionVaultEncryptor.Create(new SingleKeyProvider(), diag);
         var ciphertext = encryptor.EncryptBytes(new byte[] { 1, 2, 3 });
         var plaintext = encryptor.DecryptBytes(ciphertext);
 
