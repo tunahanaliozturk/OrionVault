@@ -4,6 +4,21 @@ All notable changes to OrionVault are recorded here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.2.27] - 2026-06-15
+
+### Added
+
+#### `orionvault.decryption.auth_tag_failures` counter
+
+`Counter<long>` increments only when an AES-GCM decryption fails specifically with an `AuthenticationTagMismatchException` - the precise signal that a ciphertext was tampered with, encrypted under a different key, or corrupted. It isolates the tamper signal from the broader v0.2.26 `decryption.failures{reason=tampered}` counter (which fires for every `CryptographicException`), so operators can alert on genuine authentication-tag failures without catching unrelated crypto errors.
+
+- Tag: `key_id` (the key the failed decrypt resolved).
+- Fires in addition to `decryption.failures`; existing metric semantics are unchanged.
+
+### Tests
+
+- `AuthTagFailuresCounterTests`: a tampered tag byte increments the counter by one; a valid decrypt leaves it at zero.
+
 ## [0.2.26] - 2026-06-13
 
 ### Added

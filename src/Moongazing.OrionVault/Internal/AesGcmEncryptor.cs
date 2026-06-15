@@ -232,6 +232,14 @@ internal sealed class AesGcmEncryptor : IEncryptor
                 _diag.DecryptionFailures.Add(1,
                     new KeyValuePair<string, object?>("reason", "tampered"),
                     new KeyValuePair<string, object?>("key_id", keyId));
+                // v0.2.27: an AuthenticationTagMismatchException is the specific AES-GCM signal
+                // that the ciphertext failed tag verification (tamper / wrong key / corruption),
+                // distinct from any other CryptographicException. Surface it on a dedicated
+                // counter operators can alert on for tamper detection.
+                if (ex is AuthenticationTagMismatchException)
+                {
+                    _diag.AuthTagFailures.Add(1, new KeyValuePair<string, object?>("key_id", keyId));
+                }
                 activity?.SetTag("outcome", "tampered");
                 var tamperedException = new OrionVaultDecryptionException(
                     "Ciphertext failed authentication (tampered, wrong key, or corrupted).", ex);
