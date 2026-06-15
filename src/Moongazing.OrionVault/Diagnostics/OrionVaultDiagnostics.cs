@@ -14,6 +14,7 @@ public sealed class OrionVaultDiagnostics : IDisposable
     internal Counter<long> Encryptions { get; }
     internal Counter<long> Decryptions { get; }
     internal Counter<long> DecryptionFailures { get; }
+    internal Counter<long> AuthTagFailures { get; }
     internal Counter<long> KeyLookups { get; }
     internal Counter<long> KeyNotFound { get; }
     internal Histogram<double> Duration { get; }
@@ -88,6 +89,14 @@ public sealed class OrionVaultDiagnostics : IDisposable
             "Number of decryption operations performed.");
         DecryptionFailures = Meter.CreateCounter<long>("orionvault.decryption.failures", "{operations}",
             "Number of failed decryptions, tagged by reason.");
+        // v0.2.27 dedicated AES-GCM authentication-tag failure counter. Increments only when the
+        // crypto failure is specifically an AuthenticationTagMismatchException - the precise
+        // signal that a ciphertext was tampered with, encrypted under a different key, or
+        // corrupted. The broader decryption.failures{reason=tampered} counter still fires for
+        // every crypto failure; this one isolates the tamper signal so operators can alert on it
+        // without catching unrelated CryptographicExceptions.
+        AuthTagFailures = Meter.CreateCounter<long>("orionvault.decryption.auth_tag_failures", "{operations}",
+            "Number of decryptions that failed AES-GCM authentication-tag verification (tamper / wrong key / corruption).");
         // v0.2.26 encrypt-side failure counter, mirroring the decryption.failures
         // counter. Encrypt can fail on key resolution (key_not_found) or the AES
         // operation itself (crypto_error). Operators alert on the rate; an encrypt
