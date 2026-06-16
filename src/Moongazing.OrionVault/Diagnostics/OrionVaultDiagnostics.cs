@@ -27,6 +27,7 @@ public sealed class OrionVaultDiagnostics : IDisposable
     internal Histogram<double> RotationCycleDuration { get; }
     internal Histogram<int> EncryptionPayloadSize { get; }
     internal Histogram<int> DecryptionPayloadSize { get; }
+    internal Histogram<double> CiphertextOverheadRatio { get; }
     internal Counter<long> LegacyKeyUsedOnDecrypt { get; }
     internal Counter<long> EncryptionFailures { get; }
     internal Histogram<double> KeyResolutionDuration { get; }
@@ -146,6 +147,18 @@ public sealed class OrionVaultDiagnostics : IDisposable
         DecryptionPayloadSize = Meter.CreateHistogram<int>(
             "orionvault.decryption.payload_size_bytes", "By",
             "Plaintext size per decrypt operation in bytes.");
+        // v0.2.29 storage-amplification ratio: ciphertext envelope bytes divided by plaintext
+        // bytes per encrypt. AES-GCM adds a FIXED header (key id + nonce) plus the auth tag, so
+        // the absolute byte overhead is constant - but the RATIO is not: tiny payloads amplify
+        // heavily (a 4-byte column can more than double once the fixed overhead is added) while
+        // large payloads approach 1.0. That non-linearity is why this is a distinct signal and
+        // not derivable from the v0.2.17 payload_size_bytes p99 alone. Operators graph p99 to
+        // budget at-rest storage for an encrypted-column workload and to spot a schema dominated
+        // by many small encrypted columns whose fixed overhead dominates total storage. Empty
+        // plaintext is not recorded (the ratio is undefined).
+        CiphertextOverheadRatio = Meter.CreateHistogram<double>(
+            "orionvault.encryption.ciphertext_overhead_ratio", "1",
+            "Ciphertext envelope bytes divided by plaintext bytes per encrypt (storage amplification).");
         // v0.2.25 registered-key-count gauge. Snapshot set once at IEncryptor
         // construction from IKeyProvider.KeyCount; -1 = provider cannot enumerate
         // (remote KMS), 0 = no snapshot yet. Operators compare against their key
