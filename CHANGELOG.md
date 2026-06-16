@@ -4,6 +4,11 @@ All notable changes to OrionVault are recorded here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.2.30] - 2026-06-17
+
+### Changed
+- Updated the package icon and README logo to the new Moongazing mark.
+
 ## [0.2.29] - 2026-06-16
 
 ### Added
