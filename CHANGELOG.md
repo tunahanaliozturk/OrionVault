@@ -4,6 +4,22 @@ All notable changes to OrionVault are recorded here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.2.29] - 2026-06-16
+
+### Added
+
+#### `orionvault.encryption.ciphertext_overhead_ratio` histogram
+
+A new `Histogram<double>` records the storage-amplification ratio per encrypt: ciphertext envelope bytes divided by plaintext bytes.
+
+- AES-GCM adds a FIXED overhead (a 14-byte header carrying the key id and nonce, plus the 16-byte authentication tag), so the absolute byte overhead is constant. The RATIO, however, is not: a tiny payload amplifies heavily (a 10-byte column becomes a 40-byte envelope, a 4.0x ratio) while a large payload approaches 1.0. That non-linearity is why this is its own signal and not derivable from the v0.2.17 `payload_size_bytes` p99 alone.
+- Operators graph p99 to budget at-rest storage for an encrypted-column workload and to spot a schema dominated by many small encrypted columns whose fixed overhead dominates total storage.
+- Recorded on the encrypt success path. Empty plaintext is not recorded because the ratio is undefined (the envelope is all fixed overhead with no plaintext to amplify).
+
+### Tests
+
+- `CiphertextOverheadRatioHistogramTests`: a 10-byte encrypt records a 4.0 ratio, and an empty-plaintext encrypt records nothing. Both isolate by Meter instance so the assertions are immune to parallel tests sharing the process-wide instrument name.
+
 ## [0.2.28] - 2026-06-15
 
 ### Added

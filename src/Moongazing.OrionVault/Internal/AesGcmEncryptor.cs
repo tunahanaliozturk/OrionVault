@@ -154,6 +154,14 @@ internal sealed class AesGcmEncryptor : IEncryptor
             // because the underlying type is int and small messages dominate; consumers
             // can apply downstream rebucketing if needed.
             _diag.EncryptionPayloadSize.Record(plaintext.Length);
+            // v0.2.29: storage-amplification ratio (envelope bytes / plaintext bytes). The fixed
+            // AES-GCM overhead makes this non-linear, so it is recorded as its own signal rather
+            // than left for operators to derive. Empty plaintext is skipped because the ratio is
+            // undefined (the envelope is all fixed overhead with no plaintext to amplify).
+            if (plaintext.Length > 0)
+            {
+                _diag.CiphertextOverheadRatio.Record((double)output.Length / plaintext.Length);
+            }
             // v0.2.23: audit observer notified after success, before return.
             InvokeAuditEncrypted(keyId, plaintext.Length, output.Length);
             return output;
