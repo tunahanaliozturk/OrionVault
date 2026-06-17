@@ -1,35 +1,53 @@
 # OrionVault Benchmarks
 
-> **Status: pending v0.2.0.** A dedicated `bench/Moongazing.OrionVault.Bench` project will land in the next minor release. This document outlines the scenarios we intend to measure and the comparison baselines we will report against.
+A [BenchmarkDotNet](https://benchmarkdotnet.org/) suite for the OrionVault AES-256-GCM core
+lives at `benchmarks/Moongazing.OrionVault.Benchmarks`. It measures the pure cryptographic
+hot paths against an in-memory key provider. No database, AWS KMS, or Azure Key Vault is
+touched, so the numbers reflect the encryptor and the envelope codec in isolation rather
+than any backing store or network round trip.
 
-## Scenarios on the roadmap
+No measured results are committed to this file. Throughput depends heavily on CPU, .NET
+runtime, and the AES-NI / VAES hardware path, so any figure here would be misleading on a
+different machine. Run the suite locally and read the BenchmarkDotNet artifacts.
 
-- **Encrypt single value (AES-GCM, hot path).** Inputs at 16 / 64 / 256 / 1024 / 4096 byte payloads. Expected metric: nanoseconds per call, allocated bytes. Goal: stay close to raw `AesGcm.Encrypt` and pay only the cost of the 30-byte header build.
-- **Decrypt single value.** Same payload sizes, reading the [keyId | nonce | tag | ciphertext] header and dispatching to the right key. Expected metric: nanoseconds per call, allocated bytes. Goal: header parse must not allocate.
-- **Value-converter round trip via EF Core.** `SaveChanges` and a tracked query on an entity with 1, 5, and 20 `[Encrypted]` columns. Expected metric: throughput in entities per second on SQLite (in-memory) and Postgres (Testcontainers). Compared against the same entity with manual `ValueConverter` instances.
-- **Key lookup under contention.** Concurrent decrypts (1 / 4 / 16 threads) hitting the static key provider with 1, 16, and 128 registered keys. Expected metric: throughput. Goal: confirm the key cache stays lock-free and constant-time.
-- **Cold-start cost.** First call after `AddOrionVault` registration. Expected metric: total time including DI resolution and converter discovery. Goal: under a millisecond on a warm process.
-- **Mixed read / write workload.** 80 percent reads / 20 percent writes against a 100,000-row table to model a realistic banking read path. Expected metric: p50 / p99 latency.
+## What is measured
 
-## Why not yet?
+All benchmarks build an `IEncryptor` via the public `OrionVaultEncryptor.Create` factory
+over an in-memory `IKeyProvider` that holds a single randomly generated 256-bit key. Every
+crypto benchmark is parameterized by plaintext size at 16, 256, and 4096 bytes to model a
+short token, a typical field, and a small blob. The fixed 30-byte AES-GCM envelope overhead
+(2-byte key id, 12-byte nonce, 16-byte tag) means the per-call cost is non-linear across
+those sizes, which is why size is a parameter rather than a single fixed input.
 
-OrionVault v0.1.0 was scoped to land the cipher format, the EF Core integration, the Roslyn analyzer, and the Testing package as one shippable unit. The encryptor is a thin wrapper over `System.Security.Cryptography.AesGcm` so we have a clear ceiling for raw throughput, but a formal harness comparing the EF Core integration overhead against a hand-rolled `ValueConverter` baseline has not been written yet. It is queued for v0.2 alongside the cloud KMS providers.
+| Benchmark class | Method(s) | Hot path measured |
+| --- | --- | --- |
+| `EncryptBenchmarks` | `EncryptBytes`, `EncryptString` | Nonce generation, header write, AES-256-GCM seal. The string variant adds the UTF-8 encode that the EF string value converter performs. |
+| `DecryptBenchmarks` | `DecryptBytes`, `DecryptString` | Header parse, key resolution, AES-256-GCM open with authentication-tag verification and plaintext copy. The string variant adds the UTF-8 decode. |
+| `RoundTripBenchmarks` | `BytesRoundTrip`, `StringRoundTrip` | A full encrypt-then-decrypt cycle, i.e. the cost one encrypted column pays across a single write and a single read. |
+| `EnvelopeEncodingBenchmarks` | `EncodeEnvelopeToBase64`, `DecodeEnvelopeFromBase64` | Base64 transport encoding and decoding of the ciphertext envelope, isolated from the AES work, for consumers persisting to a text column or shipping the envelope over JSON. |
 
-## How it will be run
+Each class is decorated with `[MemoryDiagnoser]` so allocated bytes per operation are
+reported alongside timing. Each runs under two jobs, `RuntimeMoniker.Net80` and
+`RuntimeMoniker.Net90`, so the .NET 8 and .NET 9 crypto paths can be compared side by side.
+
+## Running
 
 ```bash
-cd <repo-root>
-dotnet run -c Release --project bench/Moongazing.OrionVault.Bench
+dotnet run -c Release --project benchmarks/Moongazing.OrionVault.Benchmarks
 ```
 
-Results will land in `BenchmarkDotNet.Artifacts/results/` and a summary will be committed back to this file with each release.
+Pass a filter to run a subset, for example a single class:
 
-## Comparison baselines
+```bash
+dotnet run -c Release --project benchmarks/Moongazing.OrionVault.Benchmarks -- --filter "*EncryptBenchmarks*"
+```
 
-We will report OrionVault numbers next to honest baselines so readers can place them in context:
+List every discovered benchmark without running them:
 
-- **Raw `AesGcm.Encrypt` / `AesGcm.Decrypt`.** No converter, no header, no key lookup. Establishes the cipher ceiling.
-- **Manual `ValueConverter` (per-property AES-GCM you write yourself).** No key id in the payload, no analyzer, no telemetry. Establishes how much overhead the OrionVault abstractions add over a hand-rolled implementation.
-- **`EntityFrameworkCore.DataEncryption` (community package).** Closest commodity alternative. Establishes how OrionVault compares against an existing package readers may already be evaluating.
+```bash
+dotnet run -c Release --project benchmarks/Moongazing.OrionVault.Benchmarks -- --list flat
+```
 
-The point of the comparison is to be honest about where OrionVault sits, not to win a chart. If a manual converter is faster on a given scenario we will say so and explain why the abstraction is worth the difference, or close the gap.
+Results are written to `BenchmarkDotNet.Artifacts/results/` next to the working directory.
+The two-job configuration requires the .NET 8 and .NET 9 runtimes to be installed for a
+full run; use `--runtimes net8.0` or `--runtimes net9.0` to restrict to one.
