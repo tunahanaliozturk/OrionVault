@@ -4,6 +4,11 @@ All notable changes to OrionVault are recorded here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.2.31] - 2026-06-17
+
+### Changed
+- Set the NuGet package icon to the navy Moongazing mark and the README logo to the white Moongazing mark.
+
 ## [0.2.30] - 2026-06-17
 
 ### Changed
