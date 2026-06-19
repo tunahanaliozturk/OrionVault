@@ -27,7 +27,8 @@ public sealed class HmacBlindIndexProvider : IBlindIndexProvider
     /// <param name="normalization">How values are normalized before hashing.</param>
     /// <exception cref="System.ArgumentNullException"><paramref name="keys"/> is null.</exception>
     /// <exception cref="OrionVaultConfigurationException">
-    /// <paramref name="keys"/> is empty or <paramref name="activeVersion"/> is not registered.
+    /// <paramref name="keys"/> is empty, <paramref name="activeVersion"/> is not registered,
+    /// or any supplied key is null or shorter than <see cref="BlindIndexKeysBuilder.MinKeyBytes"/> bytes.
     /// </exception>
     public HmacBlindIndexProvider(
         IReadOnlyDictionary<short, byte[]> keys,
@@ -43,10 +44,20 @@ public sealed class HmacBlindIndexProvider : IBlindIndexProvider
                 $"Blind index ActiveVersion {activeVersion} is not registered. Registered versions: [{string.Join(", ", keys.Keys)}].");
 
         // Copy defensively so a caller mutating the source dictionary or arrays cannot change
-        // index output after construction (which would silently break search).
+        // index output after construction (which would silently break search). Validate every
+        // version (active and retained) against the same minimum length BlindIndexKeysBuilder.Add
+        // enforces, so a direct (non-DI) caller cannot silently deploy a low-entropy index key
+        // that the configured path would have rejected.
         var copy = new Dictionary<short, byte[]>(keys.Count);
         foreach (var (version, key) in keys)
         {
+            if (key is null)
+                throw new OrionVaultConfigurationException(
+                    $"Blind index key version {version} is null.");
+            if (key.Length < BlindIndexKeysBuilder.MinKeyBytes)
+                throw new OrionVaultConfigurationException(
+                    $"Blind index key version {version} is {key.Length} bytes; expected at least {BlindIndexKeysBuilder.MinKeyBytes}.");
+
             copy[version] = (byte[])key.Clone();
         }
 

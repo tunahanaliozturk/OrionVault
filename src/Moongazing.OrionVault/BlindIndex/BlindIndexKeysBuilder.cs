@@ -15,7 +15,12 @@ using Moongazing.OrionVault.Exceptions;
 /// </summary>
 public sealed class BlindIndexKeysBuilder
 {
-    private const int MinKeyBytes = 16;
+    /// <summary>
+    /// Minimum accepted HMAC key length, in bytes. Enforced on every key-registration path
+    /// (this builder and direct <see cref="HmacBlindIndexProvider"/> construction) so a weak,
+    /// low-entropy index key cannot be deployed regardless of how the provider is wired up.
+    /// </summary>
+    internal const int MinKeyBytes = 16;
     private readonly Dictionary<short, byte[]> _keys = new();
 
     /// <summary>

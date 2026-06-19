@@ -201,4 +201,48 @@ public class HmacBlindIndexProviderTests
 
         act.Should().Throw<ArgumentNullException>();
     }
+
+    [Theory]
+    [InlineData(0)]  // empty key
+    [InlineData(1)]
+    [InlineData(15)] // one byte below the 16-byte minimum
+    public void Ctor_throws_when_a_supplied_key_is_below_the_minimum_length(int keyLength)
+    {
+        var shortKey = new byte[keyLength];
+
+        var act = () => new HmacBlindIndexProvider(new Dictionary<short, byte[]> { [1] = shortKey }, 1);
+
+        act.Should().Throw<OrionVaultConfigurationException>()
+            .WithMessage("*at least 16*");
+    }
+
+    [Fact]
+    public void Ctor_accepts_a_key_at_exactly_the_minimum_length_and_compute_matches_work()
+    {
+        var minKey = Enumerable.Range(0, 16).Select(i => (byte)i).ToArray();
+
+        var sut = new HmacBlindIndexProvider(new Dictionary<short, byte[]> { [1] = minKey }, 1);
+
+        var stored = sut.Compute("ali@example.com");
+        stored.Bytes.Length.Should().Be(BlindIndexResult.TotalSize);
+        sut.Matches("ali@example.com", stored.Bytes).Should().BeTrue();
+        sut.Matches("veli@example.com", stored.Bytes).Should().BeFalse();
+    }
+
+    [Fact]
+    public void Ctor_throws_when_a_retained_version_key_is_below_the_minimum_length()
+    {
+        // Rotation case: the active key is strong but a retained (older) version is weak. Every
+        // versioned key must be validated, not just the active one.
+        var keys = new Dictionary<short, byte[]>
+        {
+            [1] = new byte[15],   // retained, too short
+            [2] = KeyV2,          // active, valid
+        };
+
+        var act = () => new HmacBlindIndexProvider(keys, activeVersion: 2);
+
+        act.Should().Throw<OrionVaultConfigurationException>()
+            .WithMessage("*version 1*at least 16*");
+    }
 }
