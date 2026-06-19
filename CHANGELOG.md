@@ -4,6 +4,27 @@ All notable changes to OrionVault are recorded here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-06-19
+
+### Added
+
+#### Searchable encryption via a deterministic blind index
+
+A new opt-in subsystem lets callers run equality search over encrypted columns without decrypting them, while the stored ciphertext stays randomized and non-deterministic.
+
+- `IBlindIndexProvider` (abstraction) and `HmacBlindIndexProvider` (HMAC-SHA256 implementation) compute a keyed, deterministic digest of a normalized value. Equal plaintexts always produce equal indexes (searchable); unequal plaintexts produce different indexes; the index is one-way and cannot be reversed to the plaintext without the key. This is independent from `IEncryptor`, which continues to produce randomized AES-GCM ciphertext. Store the ciphertext in the protected column and the blind index in a separate, searchable column, then query it with an equality predicate.
+- The index token is self-describing: layout `[version:2 BE | mac:32]` (34 bytes), exposed as `BlindIndexResult`. The leading version lets a stored index be matched back to the key it was produced under, which is what makes search survive a key rotation. `BlindIndexResult.ToHexString()` renders it as lowercase hex for a textual column.
+- Index keys are versioned and rotatable, mirroring the encryption-key model. New writes use `ActiveBlindIndexVersion`; older versions are retained so values indexed under a previous key still verify and match. `Compute` indexes under the active version, `ComputeForVersion` reproduces an older version, `ComputeAllVersions` returns one probe per version (newest first) to build an OR-predicate that matches both current and not-yet-re-indexed rows, and `Matches` verifies a stored index in constant time, resolving the version from the index itself. Re-index path: detect a stale stored version via `BlindIndexResult.TryReadVersion`, then recompute under the active version.
+- Configuration: `options.UseBlindIndex(b => b.Add(version, base64Key))` plus `options.ActiveBlindIndexVersion`, validated at startup the same way encryption keys are, and registered as a singleton `IBlindIndexProvider`. The subsystem is entirely opt-in; nothing is registered unless `UseBlindIndex` is called. Index keys must use different secret material from the encryption keys. Normalization (`BlindIndexNormalization`, default trim + invariant-lowercase) is fixed per index because changing it is a re-index operation.
+- Uses only the cross-framework `HMACSHA256.HashData` and `CryptographicOperations.FixedTimeEquals` APIs, so index output is byte-identical on net8, net9, and net10 and stable across processes and hosts configured with the same key.
+
+### Tests
+
+- `HmacBlindIndexProviderTests`: equal plaintexts produce equal indexes and unequal plaintexts produce unequal indexes; the index is stable across separate provider instances with the same key; normalization, version stamping, all-version computation, constant-time `Matches`, defensive key copying, and the index is pinned byte-for-byte to a raw `HMACSHA256.HashData` so the format is reproducible outside the library.
+- `BlindIndexKeyRotationTests`: after rotation, old-key indexes still match via the retained version while new writes use the new version; a search across the rotation matches both old and new rows; the documented re-index path recomputes a stale row under the active version.
+- `BlindIndexVersusCiphertextTests`: for the same plaintext the blind index is equal while the ciphertext differs, the index is independent of the encryption key, and the provider is a singleton registered only when configured.
+- `BlindIndexConfigurationTests`: builder rejects duplicate versions, invalid base64, and short keys; `AddOrionVault` fails fast on an unregistered `ActiveBlindIndexVersion` or an empty `UseBlindIndex`.
+
 ## [0.2.31] - 2026-06-17
 
 ### Changed
@@ -777,7 +798,8 @@ Replace `<PackageReference Include="Moongazing.OrionVault" Version="0.1.1" />` w
 - Only `string` and `byte[]` CLR types are supported. Numeric/DateTime/decimal/JSON types are on the v0.3 roadmap.
 - No cloud KMS providers yet (AWS, Azure, GCP, HashiCorp, DPAPI). All planned for v0.2 / v0.4 roadmap.
 
-[Unreleased]: https://github.com/tunahanaliozturk/OrionVault/compare/v0.2.28...HEAD
+[Unreleased]: https://github.com/tunahanaliozturk/OrionVault/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/tunahanaliozturk/OrionVault/releases/tag/v0.3.0
 [0.2.28]: https://github.com/tunahanaliozturk/OrionVault/releases/tag/v0.2.28
 [0.2.27]: https://github.com/tunahanaliozturk/OrionVault/releases/tag/v0.2.27
 [0.2.26]: https://github.com/tunahanaliozturk/OrionVault/releases/tag/v0.2.26
