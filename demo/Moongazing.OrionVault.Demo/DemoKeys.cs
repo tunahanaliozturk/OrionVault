@@ -16,4 +16,14 @@ internal static class DemoKeys
 
     public const short KeyIdV1 = 1;
     public const short KeyIdV2 = 2;
+
+    // Blind index HMAC keys. Independent from the AES keys above: the blind index trades a
+    // little confidentiality (equal values become linkable) for searchability, so its key
+    // must be different secret material. 32 bytes, base64-encoded. Two versions so the demo
+    // can show an index key rotation. All 0x22 bytes for v1, all 0x33 bytes for v2.
+    public const string BlindIndexKeyV1 = "IiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiI=";
+    public const string BlindIndexKeyV2 = "MzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM=";
+
+    public const short BlindIndexVersionV1 = 1;
+    public const short BlindIndexVersionV2 = 2;
 }

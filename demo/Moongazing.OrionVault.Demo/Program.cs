@@ -11,6 +11,7 @@ TamperDetectionDemo.Run();
 // EF Core integration demos (SQLite in-memory).
 await EfCoreColumnEncryptionDemo.RunAsync();
 await SearchableIndexDemo.RunAsync();
+await BlindIndexDemo.RunAsync();
 
 Console.WriteLine();
 Console.WriteLine("===============================================================");
