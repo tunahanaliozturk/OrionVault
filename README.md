@@ -5,7 +5,7 @@
 <h1 align="center">OrionVault</h1>
 
 <p align="center">
-  Column-level transparent data encryption at rest for EF Core. AES-256-GCM, key rotation, bundled Roslyn analyzer, OpenTelemetry.
+  Column-level transparent data encryption at rest for EF Core. AES-256-GCM, key rotation, searchable blind index, bundled Roslyn analyzer, OpenTelemetry.
 </p>
 
 <p align="center">
@@ -23,7 +23,9 @@ OrionVault encrypts individual EF Core columns at rest. You mark a property with
 
 The threat model is narrow and explicit: an attacker who obtains a database backup, dumps the storage volume, or reads a replica's disk cannot read the protected columns without the active key set. Plaintext exists only inside authorized application processes that hold those keys.
 
-This is not full-database TDE. It is not key management. It is the EF Core integration layer that sits on top of `System.Security.Cryptography.AesGcm` and a pluggable `IKeyProvider`. The v0.1.0 key provider is in-config (`UseStaticKeys`); cloud KMS providers (AWS, Azure, HashiCorp, DPAPI) are scheduled for v0.2 and v0.4.
+This is not full-database TDE. It is not key management. It is the EF Core integration layer that sits on top of `System.Security.Cryptography.AesGcm` and a pluggable `IKeyProvider`. The in-config key provider (`UseStaticKeys`) ships in the box; AWS KMS and Azure Key Vault providers ship as separate packages, and HashiCorp Vault and DPAPI providers are scheduled for v0.4.
+
+The current release is 0.3.0. It adds searchable encryption: a deterministic HMAC-SHA256 blind index (`IBlindIndexProvider`) computed alongside the randomized ciphertext, so you can run equality search over an encrypted column without decrypting it. See [Searchable encrypted columns](#searchable-encrypted-columns) below.
 
 ## How it works
 
@@ -80,7 +82,7 @@ flowchart LR
 
 | Package | Description |
 |---------|-------------|
-| `Moongazing.OrionVault` | Core: `IEncryptor`, `IKeyProvider`, `IEncryptionConfigurator`, AES-256-GCM cipher, static key provider, telemetry. Bundles the Roslyn analyzer (`analyzers/dotnet/cs/`). |
+| `Moongazing.OrionVault` | Core: `IEncryptor`, `IKeyProvider`, `IEncryptionConfigurator`, AES-256-GCM cipher, static key provider, searchable blind index (`IBlindIndexProvider`), telemetry. Bundles the Roslyn analyzer (`analyzers/dotnet/cs/`). |
 | `Moongazing.OrionVault.EntityFrameworkCore` | EF Core integration: `[Encrypted]` attribute, `IsEncrypted()` fluent API, value converter factory, `IModelCustomizer` wiring, `UseOrionVault()` extension. |
 | `Moongazing.OrionVault.Testing` | Test helpers: `AddOrionVaultForTesting()` DI extension, deterministic `TestKeyProvider`, `PlaintextEncryptor` for raw-layout tests, `EncryptionAssertions`. |
 
@@ -194,7 +196,28 @@ To actually retire key 1, re-encrypt existing rows by running them through `Save
 
 AES-GCM is randomized: encrypting the same plaintext twice produces different ciphertext. That means SQL `WHERE Email = @p` does not work against an encrypted column. The Roslyn analyzer warns about this at compile time (`OV0002`).
 
-The supported pattern is an HMAC-SHA256 index column populated alongside the encrypted value:
+v0.3.0 adds a first-class **blind index** for exactly this case. A blind index is a deterministic, keyed HMAC-SHA256 digest of a normalized value: equal plaintexts always produce equal indexes, the index cannot be reversed to the plaintext without the key, and the stored ciphertext stays randomized and non-deterministic. You store the index in a separate, non-encrypted `byte[]` column and query it with an equality predicate.
+
+Opt in with `UseBlindIndex`, then resolve `IBlindIndexProvider` from DI:
+
+```csharp
+using Moongazing.OrionVault.Abstractions;
+using Moongazing.OrionVault.DependencyInjection;
+
+services.AddOrionVault(o =>
+{
+    o.UseStaticKeys(k => k.Add(keyId: 1, base64Key: encryptionKeyBase64));
+    o.ActiveKeyId = 1;
+
+    // Index keys are independent from the encryption keys and must use different secret
+    // material. Minimum 16 bytes; 32 is recommended.
+    o.UseBlindIndex(b => b.Add(version: 1, base64Key: indexKeyBase64));
+    o.ActiveBlindIndexVersion = 1;
+})
+.UseEntityFrameworkCore<AppDbContext>();
+```
+
+Add a plain `byte[]` column for the index next to the encrypted property and populate it from the provider. The provider normalizes before hashing (default: trim and invariant-lowercase), so you do not lowercase by hand:
 
 ```csharp
 public class Customer
@@ -204,20 +227,44 @@ public class Customer
     [Encrypted]
     public string Email { get; set; } = null!;
 
-    // Deterministic HMAC of Email. Searchable, irreversible, length-stable.
+    // Blind index token from IBlindIndexProvider.Compute(...).Bytes. Searchable,
+    // irreversible, self-describing (carries its key version). NOT encrypted.
     public byte[] EmailIndex { get; set; } = null!;
 }
 
-// On the write path:
+// Write path: compute the index under the active version.
 customer.Email = email;
-customer.EmailIndex = HMACSHA256.HashData(searchKey, Encoding.UTF8.GetBytes(email.ToLowerInvariant()));
+customer.EmailIndex = index.Compute(email).Bytes;
 
-// On the read path:
-var probe = HMACSHA256.HashData(searchKey, Encoding.UTF8.GetBytes(needle.ToLowerInvariant()));
+// Read path: probe with the same provider and run an equality query server-side.
+byte[] probe = index.Compute(needle).Bytes;
 var hit = await db.Customers.SingleOrDefaultAsync(c => c.EmailIndex == probe);
 ```
 
-The HMAC key should be separate from the encryption key. A first-class convention for index columns is on the v0.3 roadmap; for now you wire it manually.
+`Matches(value, storedIndex)` verifies a candidate against a stored token in constant time, resolving the key version from the token itself.
+
+### Index key rotation
+
+Index keys are versioned, mirroring encryption key rotation: new writes use `ActiveBlindIndexVersion`, and retained older versions still match rows indexed under them. Register both versions and mark the new one active:
+
+```csharp
+o.UseBlindIndex(b =>
+{
+    b.Add(version: 1, base64Key: oldIndexKeyBase64); // keep so old rows still match
+    b.Add(version: 2, base64Key: newIndexKeyBase64); // new key for new writes
+});
+o.ActiveBlindIndexVersion = 2;
+```
+
+Until a re-index sweep rewrites old rows under the active version, search must probe every retained version. `ComputeAllVersions` returns one token per version (newest first) for an OR-probe:
+
+```csharp
+var probes = index.ComputeAllVersions(needle);
+var hit = await db.Customers.SingleOrDefaultAsync(
+    c => c.EmailIndex == probes[0].Bytes || c.EmailIndex == probes[1].Bytes);
+```
+
+The index key should be separate from the encryption key: the blind index trades a little confidentiality (equal values become linkable) for searchability, so leaking the index key must not weaken the encryption key. A runnable end-to-end example, including the rotation OR-probe, is in [demo/Moongazing.OrionVault.Demo/BlindIndexDemo.cs](demo/Moongazing.OrionVault.Demo/BlindIndexDemo.cs).
 
 ## Roslyn analyzer
 
@@ -327,7 +374,8 @@ Each ships separately on NuGet.
 See [ROADMAP.md](ROADMAP.md) for the full 12-month plan. Highlights:
 
 - v0.2 (2026-Q4) - AWS KMS provider, Azure Key Vault provider, background re-encryption hosted service, multi-DbContext support.
-- v0.3 (2027-Q1) - Numeric / DateTime / decimal column types; first-class HMAC index convention; migration helper for converting existing plaintext columns.
+- v0.3 (shipped) - First-class searchable blind index (`IBlindIndexProvider`) with versioned key rotation.
+- v0.3.x (2027-Q1) - Numeric / DateTime / decimal column types; migration helper for converting existing plaintext columns.
 - v0.4 (2027-Q1/Q2) - Windows DPAPI provider, HashiCorp Vault provider, per-tenant key partitioning.
 - v1.0 (2027-Q2) - Public API surface freeze and compliance documentation (KVKK, GDPR, PCI-DSS mapping).
 
