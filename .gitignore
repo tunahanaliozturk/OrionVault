@@ -1,5 +1,6 @@
 bin/
 obj/
+.claude/
 *.user
 *.lscache
 artifacts/

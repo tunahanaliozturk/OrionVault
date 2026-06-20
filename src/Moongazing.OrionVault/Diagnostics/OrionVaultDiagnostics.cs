@@ -83,8 +83,8 @@ public sealed class OrionVaultDiagnostics : IDisposable
 
     public OrionVaultDiagnostics()
     {
-        ActivitySource = new ActivitySource(ActivitySourceName, "0.2.0");
-        Meter = new Meter(MeterName, "0.2.0");
+        ActivitySource = new ActivitySource(ActivitySourceName, MeterVersion.Value);
+        Meter = new Meter(MeterName, MeterVersion.Value);
         Encryptions = Meter.CreateCounter<long>("orionvault.encryptions", "{operations}",
             "Number of encryption operations performed.");
         Decryptions = Meter.CreateCounter<long>("orionvault.decryptions", "{operations}",
