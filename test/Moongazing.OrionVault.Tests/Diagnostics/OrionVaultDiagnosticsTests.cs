@@ -78,6 +78,20 @@ public class OrionVaultDiagnosticsTests
     }
 
     [Fact]
+    public void Meter_and_activity_source_versions_are_derived_from_the_assembly()
+    {
+        using var diag = new OrionVaultDiagnostics();
+
+        // The version is no longer a hardcoded literal; it is derived once from the
+        // assembly informational version via MeterVersion and must flow onto both
+        // the Meter and the ActivitySource.
+        MeterVersion.Value.Should().NotBeNullOrEmpty();
+        MeterVersion.Value.Should().NotBe("0.2.0");
+        diag.Meter.Version.Should().Be(MeterVersion.Value);
+        diag.ActivitySource.Version.Should().Be(MeterVersion.Value);
+    }
+
+    [Fact]
     public void Diagnostics_singleton_is_registered()
     {
         var sp = new ServiceCollection()

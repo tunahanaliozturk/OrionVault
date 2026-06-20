@@ -4,6 +4,11 @@ All notable changes to OrionVault are recorded here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-06-20
+
+### Changed
+- The diagnostics version on the `OrionVaultDiagnostics` `Meter` and `ActivitySource` is now derived once from the assembly informational version instead of a hardcoded literal, so it always tracks the shipped package version (now `0.3.1`) and cannot drift out of sync on a release bump.
+
 ## [0.3.0] - 2026-06-19
 
 ### Added
@@ -798,7 +803,8 @@ Replace `<PackageReference Include="Moongazing.OrionVault" Version="0.1.1" />` w
 - Only `string` and `byte[]` CLR types are supported. Numeric/DateTime/decimal/JSON types are on the v0.3 roadmap.
 - No cloud KMS providers yet (AWS, Azure, GCP, HashiCorp, DPAPI). All planned for v0.2 / v0.4 roadmap.
 
-[Unreleased]: https://github.com/tunahanaliozturk/OrionVault/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/tunahanaliozturk/OrionVault/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/tunahanaliozturk/OrionVault/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/tunahanaliozturk/OrionVault/releases/tag/v0.3.0
 [0.2.28]: https://github.com/tunahanaliozturk/OrionVault/releases/tag/v0.2.28
 [0.2.27]: https://github.com/tunahanaliozturk/OrionVault/releases/tag/v0.2.27
