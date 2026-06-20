@@ -18,7 +18,7 @@
     <PackageTags>encryption;security;ef-core;column-encryption;aes-gcm;orion</PackageTags>
     <PackageIcon>icon.png</PackageIcon>
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <Version>0.3.1</Version>
+    <Version>0.3.2</Version>
   </PropertyGroup>
   <ItemGroup Condition="'$(IsPackable)' == 'true'">
     <None Include="$(MSBuildThisFileDirectory)docs/icon.png" Pack="true" PackagePath="\" />

@@ -1,5 +1,6 @@
 namespace Moongazing.OrionVault.BlindIndex;
 
+using System.Buffers;
 using System.Buffers.Binary;
 using System.Security.Cryptography;
 using System.Text;
@@ -15,6 +16,13 @@ using Moongazing.OrionVault.Exceptions;
 /// </summary>
 public sealed class HmacBlindIndexProvider : IBlindIndexProvider
 {
+    // Encode the normalized UTF-8 input into a stack buffer when it fits, falling back to a
+    // pooled (cleared on return) buffer for longer values so a large input cannot overflow the
+    // stack. 256 bytes covers the email/username inputs blind indexes are built for without
+    // touching the heap; the threshold is a transient-buffer size, not part of the wire format,
+    // so it can change without affecting any computed index.
+    private const int MaxStackInputBytes = 256;
+
     private readonly Dictionary<short, byte[]> _keys;
     private readonly short[] _versionsNewestFirst;
     private readonly BlindIndexNormalization _normalization;
@@ -92,13 +100,31 @@ public sealed class HmacBlindIndexProvider : IBlindIndexProvider
     public IReadOnlyList<BlindIndexResult> ComputeAllVersions(string value)
     {
         ArgumentNullException.ThrowIfNull(value);
-        // Normalize once; only the key changes per version.
-        var normalized = Encoding.UTF8.GetBytes(Normalize(value));
         var results = new BlindIndexResult[_versionsNewestFirst.Length];
-        for (var i = 0; i < _versionsNewestFirst.Length; i++)
+
+        // Encode the normalized input once; only the key changes per version.
+        var normalized = Normalize(value);
+        var maxBytes = Encoding.UTF8.GetMaxByteCount(normalized.Length);
+        byte[]? rented = null;
+        Span<byte> buffer = maxBytes <= MaxStackInputBytes
+            ? stackalloc byte[MaxStackInputBytes]
+            : (rented = ArrayPool<byte>.Shared.Rent(maxBytes));
+        try
         {
-            var version = _versionsNewestFirst[i];
-            results[i] = Pack(version, _keys[version], normalized);
+            var written = Encoding.UTF8.GetBytes(normalized, buffer);
+            var input = buffer[..written];
+            for (var i = 0; i < _versionsNewestFirst.Length; i++)
+            {
+                var version = _versionsNewestFirst[i];
+                results[i] = Pack(version, _keys[version], input);
+            }
+        }
+        finally
+        {
+            if (rented is not null)
+            {
+                ArrayPool<byte>.Shared.Return(rented, clearArray: true);
+            }
         }
 
         return results;
@@ -119,9 +145,26 @@ public sealed class HmacBlindIndexProvider : IBlindIndexProvider
         if (!_keys.TryGetValue(version, out var key))
             return false;
 
-        var normalized = Encoding.UTF8.GetBytes(Normalize(value));
         Span<byte> expectedMac = stackalloc byte[BlindIndexResult.MacSize];
-        HMACSHA256.HashData(key, normalized, expectedMac);
+
+        var normalized = Normalize(value);
+        var maxBytes = Encoding.UTF8.GetMaxByteCount(normalized.Length);
+        byte[]? rented = null;
+        Span<byte> buffer = maxBytes <= MaxStackInputBytes
+            ? stackalloc byte[MaxStackInputBytes]
+            : (rented = ArrayPool<byte>.Shared.Rent(maxBytes));
+        try
+        {
+            var written = Encoding.UTF8.GetBytes(normalized, buffer);
+            HMACSHA256.HashData(key, buffer[..written], expectedMac);
+        }
+        finally
+        {
+            if (rented is not null)
+            {
+                ArrayPool<byte>.Shared.Return(rented, clearArray: true);
+            }
+        }
 
         // Constant-time comparison so a timing side channel cannot reveal how many leading
         // bytes of the digest matched.
@@ -131,11 +174,29 @@ public sealed class HmacBlindIndexProvider : IBlindIndexProvider
 
     private BlindIndexResult ComputeCore(string value, short version)
     {
-        var normalized = Encoding.UTF8.GetBytes(Normalize(value));
-        return Pack(version, _keys[version], normalized);
+        var key = _keys[version];
+
+        var normalized = Normalize(value);
+        var maxBytes = Encoding.UTF8.GetMaxByteCount(normalized.Length);
+        byte[]? rented = null;
+        Span<byte> buffer = maxBytes <= MaxStackInputBytes
+            ? stackalloc byte[MaxStackInputBytes]
+            : (rented = ArrayPool<byte>.Shared.Rent(maxBytes));
+        try
+        {
+            var written = Encoding.UTF8.GetBytes(normalized, buffer);
+            return Pack(version, key, buffer[..written]);
+        }
+        finally
+        {
+            if (rented is not null)
+            {
+                ArrayPool<byte>.Shared.Return(rented, clearArray: true);
+            }
+        }
     }
 
-    private static BlindIndexResult Pack(short version, byte[] key, byte[] normalized)
+    private static BlindIndexResult Pack(short version, ReadOnlySpan<byte> key, ReadOnlySpan<byte> normalized)
     {
         var bytes = new byte[BlindIndexResult.TotalSize];
         BinaryPrimitives.WriteInt16BigEndian(bytes.AsSpan(0, BlindIndexResult.VersionSize), version);
