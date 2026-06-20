@@ -4,6 +4,13 @@ All notable changes to OrionVault are recorded here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-06-20
+
+### Performance
+
+- Blind index (`HmacBlindIndexProvider`) no longer allocates an intermediate `byte[]` for the normalized UTF-8 input on the `Compute`, `ComputeForVersion`, `ComputeAllVersions`, and `Matches` hot paths. The normalized value is now encoded into a stack buffer (with a pooled fallback, cleared on return, for inputs longer than the 256-byte stack threshold) and the HMAC reads it directly via span. `Matches` is now fully allocation-free, and `Compute` drops the per-call input allocation (measured: 104 -> 64 B/op for a typical email, with the residual being the unavoidable 34-byte result token). Blind-index output is byte-identical and the `Matches` comparison remains constant-time.
+- `AesGcmEncryptor.EncryptString` encodes the plaintext into a pooled buffer (returned with `clearArray:true` so no plaintext lingers in the pool) instead of allocating a fresh `byte[]` per call, removing one heap allocation on the per-field EF string value-converter path. Inputs longer than 8 KiB fall back to a single exact-sized allocation. The produced ciphertext is byte-identical (measured: 712 -> 432 B/op at a 256-byte field). No public API or wire-format change.
+
 ## [0.3.1] - 2026-06-20
 
 ### Changed

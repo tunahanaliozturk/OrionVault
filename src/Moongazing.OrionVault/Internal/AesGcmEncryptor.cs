@@ -1,5 +1,6 @@
 namespace Moongazing.OrionVault.Internal;
 
+using System.Buffers;
 using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
@@ -107,10 +108,36 @@ internal sealed class AesGcmEncryptor : IEncryptor
         }
     }
 
+    // UTF-8 inputs up to this length are encoded into a pooled buffer instead of a freshly
+    // allocated byte[], removing one plaintext heap allocation per EncryptString on the common
+    // per-field path. The rented buffer holds plaintext, so it is always returned with
+    // clearArray:true so no secret bytes linger in the pool. This is a transient buffer size,
+    // not a wire-format constant; the produced ciphertext is byte-identical either way.
+    private const int MaxPooledPlaintextChars = 8 * 1024;
+
     public byte[] EncryptString(string plaintext)
     {
         ArgumentNullException.ThrowIfNull(plaintext);
-        return EncryptInternal(Encoding.UTF8.GetBytes(plaintext));
+
+        // For larger inputs the rent/clear bookkeeping stops paying for itself versus a single
+        // exact-sized allocation, so fall back to the direct encode there.
+        if (plaintext.Length > MaxPooledPlaintextChars)
+        {
+            return EncryptInternal(Encoding.UTF8.GetBytes(plaintext));
+        }
+
+        var maxBytes = Encoding.UTF8.GetMaxByteCount(plaintext.Length);
+        var rented = ArrayPool<byte>.Shared.Rent(maxBytes);
+        try
+        {
+            var written = Encoding.UTF8.GetBytes(plaintext, 0, plaintext.Length, rented, 0);
+            return EncryptInternal(rented.AsSpan(0, written));
+        }
+        finally
+        {
+            // Plaintext bytes: never leave them recoverable in a pooled buffer.
+            ArrayPool<byte>.Shared.Return(rented, clearArray: true);
+        }
     }
 
     public string DecryptString(byte[] ciphertext)
