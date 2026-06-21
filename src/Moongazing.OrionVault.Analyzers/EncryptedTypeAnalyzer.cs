@@ -9,12 +9,17 @@ public sealed class EncryptedTypeAnalyzer : DiagnosticAnalyzer
 {
     public static readonly DiagnosticDescriptor Rule = new(
         id: "OV0001",
-        title: "[Encrypted] only supports string or byte[]",
-        messageFormat: "[Encrypted] only supports string or byte[] properties. Property '{0}' has type '{1}'.",
+        title: "[Encrypted] needs string or byte[] storage",
+        messageFormat: "[Encrypted] encrypts string or byte[] storage. Property '{0}' has type '{1}'; "
+            + "this is supported only when EF Core maps it through a value converter to string or byte[] "
+            + "(for example a value object), otherwise model building fails.",
         category: "Moongazing.OrionVault",
-        defaultSeverity: DiagnosticSeverity.Error,
+        defaultSeverity: DiagnosticSeverity.Info,
         isEnabledByDefault: true,
-        description: "OrionVault's [Encrypted] attribute is valid only on properties of type string or byte[].");
+        description: "OrionVault's [Encrypted] attribute encrypts string or byte[] storage. A property of "
+            + "another type is supported only when EF Core maps it through a value converter to string or "
+            + "byte[]; without such a converter, model building throws. The severity is informational "
+            + "because the analyzer cannot see EF Core value converters at compile time.");
 
     public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics =>
         ImmutableArray.Create(Rule);
