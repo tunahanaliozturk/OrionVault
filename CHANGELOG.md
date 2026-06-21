@@ -4,6 +4,28 @@ All notable changes to OrionVault are recorded here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-06-20
+
+### Added
+
+#### Encrypt EF properties that carry a value converter to a supported provider type (value-object support)
+
+OrionVault previously inspected only a property's CLR type and rejected anything that was not `string` or `byte[]`. A property mapped as a value object (for example a `Tckn` record exposed as `public Tckn NationalId` and mapped via `.HasConversion(v => v.Value, s => new Tckn(s))` to a string column) therefore failed at model build with `OrionVaultConfigurationException : Property 'Customer.NationalId' has type 'Tckn' which OrionVault does not support. Supported types: string, byte[].` even though the value EF actually stores is a supported provider type. This release supports that case.
+
+- When a property flagged for encryption has a CLR type that is not `string`/`byte[]` but already carries a value converter whose `ProviderClrType` is `string` or `byte[]`, OrionVault now COMPOSES its encryption converter on top of the existing converter via EF Core's `ValueConverter.ComposeWith`. On write the value flows model -> the existing `ConvertToProvider` (-> `string`/`byte[]`) -> AES-GCM encrypt; on read it flows ciphertext -> decrypt -> the existing `ConvertFromProvider` -> model. The column stores the encrypted form of the CONVERTED provider value, so the value object round-trips and is never persisted in the clear.
+- The encryptor sees exactly the same plaintext it would for a plain `[Encrypted] string`/`byte[]` property (the converted provider value), so the on-disk AES-GCM envelope (`[keyId(2) | nonce(12) | tag(16) | ciphertext(N)]`) and all existing ciphertext/crypto semantics are unchanged. No wire-format change.
+- Flag a value-object property with the `[Encrypted]` attribute (the `IsEncrypted()` fluent API remains typed to `string`/`byte[]` properties only) or the `OrionVault:Encrypted` annotation, then map it with `HasConversion` to a `string` or `byte[]` column.
+- A property whose CLR type is unsupported AND that has no value converter to a supported provider type (for example an `int` with no conversion, or a value object converted to an unsupported provider type) still throws the original `OrionVaultConfigurationException` with the unchanged message - that case is genuinely unsupported.
+
+### Tests
+
+- `ValueConvertedEncryptionTests` (real SQLite in-memory, real model customizer + configurator): a value object mapped to `string` and flagged `[Encrypted]` round-trips to the equal value object AND the raw column is verified at-rest to be AES-GCM ciphertext (key-id header + length) that decrypts back to the converted provider string; the same for a value object mapped to `byte[]`; and a value object whose converter targets an unsupported provider type (`int`) still throws `OrionVaultConfigurationException`.
+- Existing `EndToEndEncryptionTests`, `EncryptedConverterTests`, and `ModelIntegrationTests` (including the plain encrypted-string round-trip and the unsupported-type-with-no-converter rejection) continue to pass unchanged.
+
+### Migration from v0.3.2
+
+Source-compatible. Existing `string`/`byte[]` encrypted properties behave exactly as before; value-converter composition only kicks in for a flagged property whose CLR type is not itself a supported provider type.
+
 ## [0.3.2] - 2026-06-20
 
 ### Performance
@@ -810,7 +832,9 @@ Replace `<PackageReference Include="Moongazing.OrionVault" Version="0.1.1" />` w
 - Only `string` and `byte[]` CLR types are supported. Numeric/DateTime/decimal/JSON types are on the v0.3 roadmap.
 - No cloud KMS providers yet (AWS, Azure, GCP, HashiCorp, DPAPI). All planned for v0.2 / v0.4 roadmap.
 
-[Unreleased]: https://github.com/tunahanaliozturk/OrionVault/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/tunahanaliozturk/OrionVault/compare/v0.3.3...HEAD
+[0.3.3]: https://github.com/tunahanaliozturk/OrionVault/compare/v0.3.2...v0.3.3
+[0.3.2]: https://github.com/tunahanaliozturk/OrionVault/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/tunahanaliozturk/OrionVault/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/tunahanaliozturk/OrionVault/releases/tag/v0.3.0
 [0.2.28]: https://github.com/tunahanaliozturk/OrionVault/releases/tag/v0.2.28
