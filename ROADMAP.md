@@ -2,9 +2,9 @@
 
 OrionVault follows the same release rhythm as the rest of the Orion family: quarterly minor versions, patch releases as needed, and a v1.0 only when the public API surface is stable.
 
-## Current release: 0.3.3 (2026-06-20)
+## Current release: 0.3.4 (2026-06-22)
 
-Column-level transparent data encryption at rest for EF Core: AES-256-GCM with a per-row key id, multi-key read / single-key write rotation, a searchable HMAC blind index, AWS KMS and Azure Key Vault providers, a bundled Roslyn analyzer, and OpenTelemetry instrumentation. Multi-targets net8.0 / net9.0 / net10.0.
+Column-level transparent data encryption at rest for EF Core: AES-256-GCM with a per-row key id, multi-key read / single-key write rotation, a searchable HMAC blind index, an EF Core re-encryption / blind-index re-index runner, AWS KMS and Azure Key Vault providers, a bundled Roslyn analyzer, and OpenTelemetry instrumentation. Multi-targets net8.0 / net9.0 / net10.0.
 
 ## Released / recently shipped
 
@@ -20,14 +20,11 @@ The items below were on earlier roadmaps and are now shipped. They are listed he
 - **Searchable encryption via a deterministic blind index (0.3.0).** `IBlindIndexProvider` / `HmacBlindIndexProvider` compute a keyed, one-way HMAC-SHA256 digest for equality search while the stored ciphertext stays randomized. Index keys are versioned and rotatable; `ComputeAllVersions` builds the cross-rotation OR-probe and `BlindIndexResult.TryReadVersion` drives the re-index path.
 - **Allocation cuts (0.3.2).** Blind-index hot paths encode into stack / pooled buffers (`Matches` is allocation-free); `AesGcmEncryptor.EncryptString` encodes through a pooled buffer. Ciphertext and index output are byte-identical, no wire-format change.
 - **Value-object encryption (0.3.3).** A property whose CLR type is not `string` / `byte[]` but carries a value converter to a `string` / `byte[]` provider type (for example a `Tckn` record) is now encrypted by composing the encryption converter on top of the existing one. The on-disk envelope is unchanged.
+- **Re-encryption and re-index tooling (0.3.4).** `IEncryptionMaintenance` / `ReencryptionRunner` (EF Core) walk a table in bounded batches and bring every row up to the active key and active blind-index version, reusing `EncryptionRotator` and the blind-index `Compute` / `TryReadVersion` primitives. Idempotent (already-active rows are skipped), resumable (each batch saved before the next is read), cancellable, and reports scanned / re-encrypted / re-indexed / skipped / errors on the existing rotation telemetry. Wired with `UseReencryptionRunner()`.
 
 ## Next
 
 Concrete, near-term work that builds on the primitives already shipped.
-
-### 0.3.4 - 2026-Q3
-
-- **Re-encryption and re-index tooling.** Wrap the existing `EncryptionRotator` / `EncryptionRotationHostedService` and the blind-index `ComputeAllVersions` / `TryReadVersion` probe into a runnable command-line pass so an operator can sweep a table, re-encrypt rows under the active key, and rewrite stale blind-index tokens under the active version without hand-writing the storage walk each time. Reports scanned / rewritten / skipped counts on the existing rotation telemetry.
 
 ### 0.4.0 - 2026-Q4
 
