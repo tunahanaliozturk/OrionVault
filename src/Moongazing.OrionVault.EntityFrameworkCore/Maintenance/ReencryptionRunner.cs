@@ -112,6 +112,14 @@ public sealed partial class ReencryptionRunner : IEncryptionMaintenance
             // immutable key, this never double-processes or misses a row.
             offset += batch.Count;
 
+            // Detach this batch's entities now that they are saved. BatchSize bounds the QUERY, not
+            // the change tracker: without this clear a long run accumulates every processed entity,
+            // growing memory unbounded and forcing each later SaveChanges/DetectChanges to re-scan
+            // all previously processed rows (O(n^2) over the table). The paging cursor is the local
+            // 'offset' above, which is independent of tracker state, so clearing here does not skip
+            // or re-fetch rows - the next Skip(offset)/Take resumes exactly where this batch ended.
+            context.ChangeTracker.Clear();
+
             if (batch.Count < plan.BatchSize)
             {
                 break;
@@ -241,7 +249,17 @@ public sealed partial class ReencryptionRunner : IEncryptionMaintenance
         // A missing or malformed token is treated as stale so the pass repairs it by writing a
         // fresh active-version token. A readable token is stale only when its version differs from
         // the active version.
-        if (storedIndex is null || !BlindIndexResult.TryReadVersion(storedIndex, out var version))
+        //
+        // The length gate is load-bearing and must mirror the search path
+        // (HmacBlindIndexProvider.Matches), which rejects any token whose length != TotalSize
+        // BEFORE comparing. TryReadVersion only requires VersionSize (2) bytes, so a truncated or
+        // over-long token whose first two bytes happen to equal the active version would otherwise
+        // read as "current" and be skipped - leaving a row that search can never match. Requiring
+        // the exact TotalSize here forces such a token to be recomputed into a well-formed,
+        // searchable one.
+        if (storedIndex is null
+            || storedIndex.Length != BlindIndexResult.TotalSize
+            || !BlindIndexResult.TryReadVersion(storedIndex, out var version))
         {
             return true;
         }

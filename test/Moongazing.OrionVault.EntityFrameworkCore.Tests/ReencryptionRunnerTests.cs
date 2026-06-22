@@ -613,4 +613,142 @@ public sealed class ReencryptionRunnerTests : IDisposable
         var hit = await verifyCtx.Customers.SingleOrDefaultAsync(c => c.EmailIndex == probe);
         hit.Should().NotBeNull();
     }
+
+    [Fact]
+    public async Task A_wrong_length_blind_index_whose_prefix_matches_the_active_version_is_re_indexed_and_becomes_searchable()
+    {
+        // Regression: a stored token that is TRUNCATED (wrong length) but whose first two bytes
+        // happen to equal the active index version (2 => 0x00 0x02). TryReadVersion only needs the
+        // 2-byte prefix, so a naive "is this current?" check would read version 2, decide the index
+        // is already current, and SKIP the row - leaving a token the search path can never match
+        // (HmacBlindIndexProvider.Matches rejects any token whose length != TotalSize before
+        // comparing). The runner must instead treat the wrong-length token as stale and recompute a
+        // well-formed, searchable one.
+        await using var sp = BuildMaintenanceHost(withBlindIndex: true); // active key 2, active index version 2
+
+        var rowId = Guid.NewGuid();
+        using (var seedScope = sp.CreateScope())
+        {
+            var raw = seedScope.ServiceProvider.GetRequiredService<RawCtx>();
+            var encryptor = seedScope.ServiceProvider.GetRequiredService<IEncryptor>();
+            await raw.Database.EnsureCreatedAsync();
+
+            // A malformed token: active-version prefix (0x00 0x02) followed by too few MAC bytes, so
+            // the total length is NOT BlindIndexResult.TotalSize (34). The envelope is already on the
+            // active key 2 so nothing else needs rotating - this isolates the re-index decision.
+            var malformedIndex = new byte[] { 0x00, 0x02, 0xDE, 0xAD, 0xBE, 0xEF };
+            malformedIndex.Length.Should().NotBe(34); // guard: this test only means anything if the token is the wrong length
+
+            raw.Customers.Add(new RawCustomer
+            {
+                Id = rowId,
+                Name = "n",
+                Email = encryptor.EncryptString("trunc@x.com"), // key 2 (active) - no rotation needed
+                EmailIndex = malformedIndex,                     // active-version prefix but wrong length
+                IdScan = null,
+            });
+            await raw.SaveChangesAsync();
+        }
+
+        ReencryptionReport report;
+        using (var scope = sp.CreateScope())
+        {
+            var runner = scope.ServiceProvider.GetRequiredService<IEncryptionMaintenance>();
+            var ctx = scope.ServiceProvider.GetRequiredService<RawCtx>();
+            report = await runner.RunAsync(ctx, EmailPlan(withBlindIndex: true));
+        }
+
+        report.Scanned.Should().Be(1);
+        report.ReEncrypted.Should().Be(0); // ciphertext already on the active key
+        report.ReIndexed.Should().Be(1);   // the malformed token MUST be repaired, not skipped
+        report.Skipped.Should().Be(0);
+        report.Errors.Should().Be(0);
+
+        // The stored token is now a well-formed, active-version token of the correct length ...
+        using (var afterScope = sp.CreateScope())
+        {
+            var afterRaw = afterScope.ServiceProvider.GetRequiredService<RawCtx>();
+            var stored = await afterRaw.Customers.Where(c => c.Id == rowId).Select(c => c.EmailIndex).SingleAsync();
+            stored!.Length.Should().Be(34);
+            stored![0].Should().Be(0);
+            stored![1].Should().Be(2);
+        }
+
+        // ... and the row is now searchable: a probe computed under the active version matches it
+        // with a single equality predicate, which is exactly what the truncated token prevented.
+        await using var verifySp = BuildEncryptingHost(activeKeyId: 2, withBlindIndex: true, activeIndexVersion: 2);
+        using var verifyScope = verifySp.CreateScope();
+        var index = verifyScope.ServiceProvider.GetRequiredService<IBlindIndexProvider>();
+        var verifyCtx = verifyScope.ServiceProvider.GetRequiredService<EncryptingCtx>();
+        byte[] probe = index.Compute("trunc@x.com").Bytes;
+        var hit = await verifyCtx.Customers.SingleOrDefaultAsync(c => c.EmailIndex == probe);
+        hit.Should().NotBeNull();
+        hit!.Email.Should().Be("trunc@x.com");
+    }
+
+    [Fact]
+    public async Task A_multi_batch_run_completes_correctly_and_does_not_retain_prior_batch_entities()
+    {
+        // Seed more rows than the batch size so the run spans several batches. The change tracker
+        // must stay bounded per batch (BatchSize), NOT accumulate every processed row across the
+        // whole run - otherwise a large table grows memory unbounded and each later SaveChanges
+        // re-scans all previously processed rows.
+        const int rowCount = 7;
+        const int batchSize = 2;
+        var emails = Enumerable.Range(0, rowCount).Select(i => $"batch{i}@x.com").ToArray();
+        await SeedAsync(activeKeyId: 1, withBlindIndex: true, activeIndexVersion: 1, emails);
+
+        await using var sp = BuildMaintenanceHost(withBlindIndex: true);
+
+        ReencryptionReport report;
+        int maxTrackedDuringRun;
+        using (var scope = sp.CreateScope())
+        {
+            var runner = scope.ServiceProvider.GetRequiredService<IEncryptionMaintenance>();
+            var ctx = scope.ServiceProvider.GetRequiredService<RawCtx>();
+
+            // SavingChanges fires once per batch, right before that batch is persisted while its
+            // entities are still tracked. Capture the high-water mark of tracked entries: with a
+            // per-batch ChangeTracker.Clear() it can never exceed BatchSize; without the clear it
+            // would climb to rowCount as batches accumulate.
+            maxTrackedDuringRun = 0;
+            ctx.SavingChanges += (_, _) =>
+            {
+                var tracked = ctx.ChangeTracker.Entries<RawCustomer>().Count();
+                if (tracked > maxTrackedDuringRun)
+                {
+                    maxTrackedDuringRun = tracked;
+                }
+            };
+
+            report = await runner.RunAsync(ctx, EmailPlan(withBlindIndex: true).WithBatchSize(batchSize));
+
+            // The tracker is empty once the run returns: the final batch is cleared like every other.
+            ctx.ChangeTracker.Entries().Should().BeEmpty();
+        }
+
+        // Tracking stayed bounded by the batch size across the whole run (the bug would push this to
+        // rowCount as every processed entity piled up in the tracker).
+        maxTrackedDuringRun.Should().BeLessThanOrEqualTo(batchSize);
+
+        // ... and the run is still correct: every row was scanned and migrated exactly once.
+        report.Scanned.Should().Be(rowCount);
+        report.ReEncrypted.Should().Be(rowCount);
+        report.ReIndexed.Should().Be(rowCount);
+        report.Skipped.Should().Be(0);
+        report.Errors.Should().Be(0);
+
+        // Every row decrypts under the active key and matches its index under the active version -
+        // no row was skipped or double-processed by the per-batch clear.
+        await using var verifySp = BuildEncryptingHost(activeKeyId: 2, withBlindIndex: true, activeIndexVersion: 2);
+        using var verifyScope = verifySp.CreateScope();
+        var verifyCtx = verifyScope.ServiceProvider.GetRequiredService<EncryptingCtx>();
+        var index = verifyScope.ServiceProvider.GetRequiredService<IBlindIndexProvider>();
+        var all = await verifyCtx.Customers.ToListAsync();
+        all.Should().HaveCount(rowCount);
+        foreach (var c in all)
+        {
+            index.Matches(c.Email, c.EmailIndex).Should().BeTrue();
+        }
+    }
 }
