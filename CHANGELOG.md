@@ -4,6 +4,45 @@ All notable changes to OrionVault are recorded here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-06-22
+
+### Added
+
+#### EF Core re-encryption / blind-index re-index runner
+
+After rolling the active encryption key (and / or the active blind-index version), existing rows still carry the previous key id in their AES-GCM header and the previous version in their blind-index token. Until now an operator had to hand-write the storage walk: either implement `IRotationSource<THandle>` for the v0.2.12 `EncryptionRotationHostedService` (ciphertext only, no blind index) or the v0.2.0 `IReEncryptionTarget` (everything consumer-side). This release ships a first-class EF Core pass that walks a table in bounded batches and brings every row up to the active key and active index version, reusing the existing primitives rather than re-implementing any cryptography.
+
+- **`IEncryptionMaintenance`** (in `Moongazing.OrionVault.EntityFrameworkCore.Maintenance`) with a single `RunAsync<TEntity>(DbContext, ReencryptionPlan<TEntity>, CancellationToken)` method, implemented by **`ReencryptionRunner`**. The runner pages the entity with an ordered `Skip`/`Take` walk (the order key is the immutable PK, so the window stays stable across the writes the pass makes), re-encrypts stale ciphertext via `EncryptionRotator.Rotate` / `RotateString`, recomputes stale blind-index tokens via `IBlindIndexProvider.Compute`, and `SaveChanges` once per batch.
+- **`ReencryptionPlan<TEntity>`** / **`ReencryptionPlan.For<TEntity>(orderBy)`** plus **`EncryptedColumnPlan.ForString` / `ForBytes` / `ForStringWithBlindIndex`** describe the walk with strongly-typed delegates only (no reflection over the EF model). The column accessors read and write the RAW stored envelope bytes, so the pass is run against a `DbContext` that maps the encrypted columns as plain `byte[]` (without the OrionVault value converter): that is what lets `EncryptionRotator.NeedsRotation` skip already-active rows cheaply by header and gives the runner explicit control over exactly when it decrypts and re-encrypts. Routing the pass through the normal encrypting context would auto-decrypt under the old key on read and re-encrypt every row on write unconditionally, defeating both the cheap skip and idempotency.
+- **Idempotent**: a row already on the active key id AND active index version is left untouched (no write) and counted as skipped. A second pass over a fully-migrated table rewrites nothing and reports every row as skipped.
+- **Resumable**: safe to re-run after an interruption (cancellation, crash). Each batch is saved before the next is read, so an interrupted run leaves a migrated prefix; a fresh run re-scans from the start but no-ops every already-migrated row, so only the remainder is rewritten.
+- **Bounded + cancellable**: `ReencryptionPlan.WithBatchSize` (default 500) caps working-set memory and transaction size; the `CancellationToken` is honoured between batches and on each EF Core await. Per-row failures (a malformed blob, an unknown key id) are swallowed, counted, and logged so one bad row does not abort the sweep.
+- **`ReencryptionReport(Scanned, ReEncrypted, ReIndexed, Skipped, Errors)`** (in `Moongazing.OrionVault.Rotation`, alongside `RotationCycleResult`) is returned from the pass, with `Empty` and a componentwise `Add` for folding batch totals. Re-encrypted / re-indexed are tracked independently (a row can need either, both, or neither). The runner also feeds the existing rotation telemetry: `orionvault.rotation.rows_rotated` / `rows_skipped` / `row_errors` counters, the `cycle_duration_ms` histogram, and the v0.2.15 last-cycle gauges.
+- DI: **`OrionVaultBuilder.UseReencryptionRunner()`** registers `IEncryptionMaintenance` as a singleton (the per-run `DbContext` is passed in, so no scoped capture). It picks up the registered `IEncryptor`, `IKeyProvider`, the optional `IBlindIndexProvider` (only when `UseBlindIndex` was configured), and the optional `OrionVaultDiagnostics`. A plan that registers a blind-index column without a registered provider fails fast with a clear `InvalidOperationException`.
+
+### Tests
+
+- `ReencryptionRunnerTests` (real SQLite, shared-cache in-memory, isolated per test): old-key rows become readable under the active key after a pass and their raw header flips to the active key id; blind-index lookups match under the active version after re-index (a single current-version probe finds a row that previously needed an OR-probe); re-running an already-migrated table is a byte-for-byte no-op (every stored envelope and token is unchanged); an interrupted pass (cancelled after the first saved batch) resumes correctly on re-run, finishing only the remainder and leaving all rows decryptable and matching; a row already on the active key is skipped not rewritten; `byte[]` columns are rotated; a null encrypted column is left untouched; a stale blind index is recomputed even when the ciphertext is already active; and the misconfiguration guards (blind-index column with no provider, plan with no columns) throw.
+- `ReencryptionReportTests` (core): `Empty` is all-zero, `Add` sums componentwise, `Add` with `Empty` is identity, and `Add(null)` throws.
+
+### Migration from v0.3.3
+
+Source-compatible and additive. Nothing is registered unless `UseReencryptionRunner()` is called; existing `EncryptionRotator`, `EncryptionRotationHostedService`, `IReEncryptionTarget`, the blind index, and the OV0001 analyzer are unchanged.
+
+```csharp
+services.AddOrionVault(o => { o.UseStaticKeys(...); o.ActiveKeyId = 2; o.UseBlindIndex(...); o.ActiveBlindIndexVersion = 2; })
+    .UseReencryptionRunner();
+
+// against a DbContext that maps the encrypted columns as raw byte[]:
+var runner = sp.GetRequiredService<IEncryptionMaintenance>();
+var plan = ReencryptionPlan.For<RawCustomer>(q => q.OrderBy(c => c.Id))
+    .WithBatchSize(1000)
+    .WithColumn(EncryptedColumnPlan.ForStringWithBlindIndex<RawCustomer>(
+        nameof(RawCustomer.Email), c => c.Email, (c, v) => c.Email = v,
+        c => c.EmailIndex, (c, v) => c.EmailIndex = v));
+var report = await runner.RunAsync(rawCtx, plan, ct);
+```
+
 ## [0.3.3] - 2026-06-20
 
 ### Added
@@ -832,7 +871,8 @@ Replace `<PackageReference Include="Moongazing.OrionVault" Version="0.1.1" />` w
 - Only `string` and `byte[]` CLR types are supported. Numeric/DateTime/decimal/JSON types are on the v0.3 roadmap.
 - No cloud KMS providers yet (AWS, Azure, GCP, HashiCorp, DPAPI). All planned for v0.2 / v0.4 roadmap.
 
-[Unreleased]: https://github.com/tunahanaliozturk/OrionVault/compare/v0.3.3...HEAD
+[Unreleased]: https://github.com/tunahanaliozturk/OrionVault/compare/v0.3.4...HEAD
+[0.3.4]: https://github.com/tunahanaliozturk/OrionVault/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/tunahanaliozturk/OrionVault/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/tunahanaliozturk/OrionVault/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/tunahanaliozturk/OrionVault/compare/v0.3.0...v0.3.1
