@@ -4,6 +4,49 @@ All notable changes to OrionVault are recorded here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-06-28
+
+### Added
+
+#### Envelope-key caching (core)
+
+Until now the envelope-encryption providers (AWS KMS, Azure Key Vault) unwrapped each data key exactly once at host startup and pinned the plaintext in process memory for the provider lifetime. A data key disabled, revoked, or rotated at the KMS was not picked up until the host restarted. This release adds an opt-in, refreshing cache so a long-running host re-fetches the wrapped keys on a configurable TTL.
+
+- **`CachingKeyProvider`** (in `Moongazing.OrionVault.Caching`) wraps an **`IUnwrappedKeySource`** (the new "unwrap every configured data key" seam) and serves the unwrapped snapshot until its TTL elapses, then re-fetches. Thread-safe and bounded: exactly one immutable `FrozenDictionary` snapshot is held; a `SemaphoreSlim` single-flights refreshes so a burst of stale reads triggers one KMS round-trip, not one per caller; the snapshot reference is swapped atomically so readers never see a half-built map. Time is read through an injected `TimeProvider`, so TTL expiry is deterministic under test.
+- **`EnvelopeKeyCacheOptions`** carries `Enabled` (default `false` - the historical unwrap-once behaviour stays the default), `Ttl` (default 15 minutes, must be strictly positive when enabled), and `ServeStaleOnRefreshFailure` (default `true`: keep serving the last-good snapshot through a transient KMS failure rather than taking the decrypt path down; the very first unwrap always propagates its failure since there is nothing to fall back to). Set `ServeStaleOnRefreshFailure = false` to fail closed instead.
+- The provider validates each refreshed snapshot exactly like the unwrap-once path: every key must be 32 bytes and the active key id must be present, otherwise `OrionVaultConfigurationException`. `CachingKeyProvider.Prime()` forces the first unwrap up front so misconfiguration and the first KMS round-trip surface at composition time, matching the unwrap-once fail-fast behaviour.
+
+#### GCP KMS provider (new package `OrionVault.GcpKms`)
+
+- **`Moongazing.OrionVault.GcpKms`** (PackageId `OrionVault.GcpKms`) is a key provider over Google Cloud KMS (`Google.Cloud.Kms.V1`), on the same wrap-at-rest / unwrap-at-startup envelope shape as the AWS and Azure providers. The Cloud KMS crypto key never leaves Google Cloud; only wrapped data keys live in config. `AddOrionVaultGcpKms(...)` registers it as the singleton `IKeyProvider`; the consumer registers the `KeyManagementServiceClient`. A narrow `IGcpKmsDecryptClient` seam (mirroring Azure's `IKeyVaultUnwrapClient`) keeps the provider unit-testable without a network. Opt into envelope-key caching via `o.Cache.Enabled = true`.
+
+#### HashiCorp Vault provider (new package `OrionVault.HashiCorpVault`)
+
+- **`Moongazing.OrionVault.HashiCorpVault`** (PackageId `OrionVault.HashiCorpVault`) is a key provider over HashiCorp Vault's transit secrets engine (`VaultSharp`), same contract. The wrapped value is the transit engine's own `vault:v1:...` ciphertext string (not an opaque base64 blob), so the `IVaultTransitDecryptClient` seam takes the ciphertext as a string. `AddOrionVaultHashiCorpVault(...)` registers it as the singleton `IKeyProvider`; the consumer registers the `IVaultClient` and chooses the transit key name and mount point (default `transit`). Opt into envelope-key caching via `o.Cache.Enabled = true`.
+
+Both new packages multi-target net8.0 / net9.0 / net10.0, bundle a README, and reference the core. They are additive: nothing existing changes, and the maintainer adds the two new package ids to the publish pack list before release.
+
+### Tests
+
+- `CachingKeyProviderTests` (core, deterministic via a manual `TimeProvider`): unwraps once then serves repeated lookups from cache within the TTL; refreshes after the TTL elapses and picks up a rotated key; does not refresh again until a second TTL window passes; `Prime` surfaces misconfiguration eagerly; rejects a wrong-length key from the source; serves the stale snapshot when a refresh fails and the policy allows; fails closed when stale-serve is disabled; the first unwrap failure always propagates; `ActiveKeyId` is exposed without unwrapping; and a burst of concurrent cold lookups unwraps exactly once (single-flight).
+- `GcpKmsKeyProviderTests` / `HashiCorpVaultKeyProviderTests` (mock-seam unit tests, mirroring the AwsKms / Azure suites): the provider unwraps each configured entry through the mocked KMS, validates active-id-in-map and 32-byte length, rejects empty / whitespace / non-base64 (GCP) ciphertext, and surfaces KMS errors to the caller.
+- `GcpKmsKeyProviderLiveTests` / `HashiCorpVaultKeyProviderLiveTests` are conditional live integration tests (env-var gated, vacuous pass when unconfigured), mirroring the Azure Key Vault live suite: no offline emulator for Cloud KMS / Vault ships in this toolchain, so the mock-seam unit tests carry the on-CI coverage for the provider contract.
+
+### Migration from v0.3.4
+
+Source-compatible and additive. The envelope-key cache is opt-in and off by default; existing AWS / Azure wiring unwraps once at startup exactly as before. To enable refresh on the new GCP / Vault providers, set the cache options on `o.Cache`:
+
+```csharp
+services.AddOrionVaultGcpKms(o =>
+{
+    o.CryptoKeyName = "projects/p/locations/global/keyRings/r/cryptoKeys/orionvault";
+    o.ActiveKeyId = 1;
+    o.WrappedKeys[1] = "BASE64-KMS-CIPHERTEXT";
+    o.Cache.Enabled = true;
+    o.Cache.Ttl = TimeSpan.FromMinutes(10);
+});
+```
+
 ## [0.3.4] - 2026-06-22
 
 ### Added
