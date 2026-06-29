@@ -2,9 +2,9 @@
 
 OrionVault follows the same release rhythm as the rest of the Orion family: quarterly minor versions, patch releases as needed, and a v1.0 only when the public API surface is stable.
 
-## Current release: 0.3.4 (2026-06-22)
+## Current release: 0.4.0 (2026-06-28)
 
-Column-level transparent data encryption at rest for EF Core: AES-256-GCM with a per-row key id, multi-key read / single-key write rotation, a searchable HMAC blind index, an EF Core re-encryption / blind-index re-index runner, AWS KMS and Azure Key Vault providers, a bundled Roslyn analyzer, and OpenTelemetry instrumentation. Multi-targets net8.0 / net9.0 / net10.0.
+Column-level transparent data encryption at rest for EF Core: AES-256-GCM with a per-row key id, multi-key read / single-key write rotation, a searchable HMAC blind index, an EF Core re-encryption / blind-index re-index runner, AWS KMS / Azure Key Vault / GCP KMS / HashiCorp Vault providers with opt-in envelope-key caching, a bundled Roslyn analyzer, and OpenTelemetry instrumentation. Multi-targets net8.0 / net9.0 / net10.0.
 
 ## Released / recently shipped
 
@@ -21,15 +21,12 @@ The items below were on earlier roadmaps and are now shipped. They are listed he
 - **Allocation cuts (0.3.2).** Blind-index hot paths encode into stack / pooled buffers (`Matches` is allocation-free); `AesGcmEncryptor.EncryptString` encodes through a pooled buffer. Ciphertext and index output are byte-identical, no wire-format change.
 - **Value-object encryption (0.3.3).** A property whose CLR type is not `string` / `byte[]` but carries a value converter to a `string` / `byte[]` provider type (for example a `Tckn` record) is now encrypted by composing the encryption converter on top of the existing one. The on-disk envelope is unchanged.
 - **Re-encryption and re-index tooling (0.3.4).** `IEncryptionMaintenance` / `ReencryptionRunner` (EF Core) walk a table in bounded batches and bring every row up to the active key and active blind-index version, reusing `EncryptionRotator` and the blind-index `Compute` / `TryReadVersion` primitives. Idempotent (already-active rows are skipped), resumable (each batch saved before the next is read), cancellable, and reports scanned / re-encrypted / re-indexed / skipped / errors on the existing rotation telemetry. Wired with `UseReencryptionRunner()`.
+- **Envelope-key caching (0.4.0).** `CachingKeyProvider` / `IUnwrappedKeySource` / `EnvelopeKeyCacheOptions` (in `Moongazing.OrionVault.Caching`) add an opt-in, refreshing cache over the envelope-encryption providers: the unwrapped key snapshot is re-fetched once its configurable TTL elapses, so a data key disabled / revoked / rotated at the KMS is honoured without a host restart. Thread-safe, bounded, single-flight refresh, deterministic via an injected `TimeProvider`; off by default (unwrap-once stays the default), with a serve-stale-on-refresh-failure policy.
+- **GCP KMS and HashiCorp Vault providers (0.4.0).** `Moongazing.OrionVault.GcpKms` (over `Google.Cloud.Kms.V1`) and `Moongazing.OrionVault.HashiCorpVault` (over `VaultSharp`'s transit engine), each on the same wrap-at-rest, unwrap-at-startup envelope shape as the AWS and Azure providers, with the same opt-in envelope-key caching.
 
 ## Next
 
 Concrete, near-term work that builds on the primitives already shipped.
-
-### 0.4.0 - 2026-Q4
-
-- **Envelope-key caching.** Today the KMS / Key Vault providers unwrap every data key once at startup and hold the plaintext in process memory for the provider's lifetime. Add an opt-in cache layer with a configurable TTL and refresh so long-running hosts can re-fetch wrapped keys (supporting key disable / revocation at the KMS) instead of pinning them for the process lifetime.
-- **More KMS providers.** GCP KMS (`Moongazing.OrionVault.GcpKms`) and HashiCorp Vault (`Moongazing.OrionVault.HashiCorp`), each on the same wrap-at-rest, unwrap-at-startup envelope shape as the AWS and Azure providers.
 
 ### 0.5.0 - 2027-Q1
 

@@ -25,6 +25,8 @@
     <PackageVersion Include="AWSSDK.KeyManagementService" Version="3.7.500" />
     <PackageVersion Include="Azure.Security.KeyVault.Keys" Version="4.7.0" />
     <PackageVersion Include="Azure.Identity" Version="1.13.1" />
+    <PackageVersion Include="Google.Cloud.Kms.V1" Version="3.24.0" />
+    <PackageVersion Include="VaultSharp" Version="1.17.5.1" />
     <PackageVersion Include="Moq" Version="4.20.72" />
     <PackageVersion Include="Testcontainers.LocalStack" Version="3.10.0" />
   </ItemGroup>

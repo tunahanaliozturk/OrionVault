@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFrameworks>net8.0;net9.0;net10.0</TargetFrameworks>
+    <IsPackable>true</IsPackable>
+    <PackageId>OrionVault.HashiCorpVault</PackageId>
+    <Description>HashiCorp Vault key provider for OrionVault. Wraps OrionVault's symmetric data keys with a Vault transit-engine key via envelope encryption. The transit key never leaves Vault; the per-key data keys are decrypted at host startup (or refreshed on a TTL with the opt-in envelope-key cache) and held in process memory. Implements the standard IKeyProvider contract.</Description>
+    <PackageTags>encryption;hashicorp;vault;transit;envelope-encryption;orionvault</PackageTags>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="VaultSharp" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Moongazing.OrionVault\Moongazing.OrionVault.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Moongazing.OrionVault.HashiCorpVault.Tests" />
+  </ItemGroup>
+</Project>
