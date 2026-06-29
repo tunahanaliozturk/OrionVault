@@ -1,8 +1,10 @@
 namespace Moongazing.OrionVault.HashiCorpVault;
 
 using System.Collections.Frozen;
+using System.Net;
 using Moongazing.OrionVault.Abstractions;
 using Moongazing.OrionVault.Exceptions;
+using VaultSharp.Core;
 
 /// <summary>
 /// HashiCorp Vault transit-engine-backed <see cref="IKeyProvider"/>. Holds a map of OrionVault key
@@ -16,8 +18,15 @@ using Moongazing.OrionVault.Exceptions;
 /// map until rows encrypted under them are re-encrypted by the v0.2.0 background re-encryption
 /// service. Each entry's plaintext is held in memory once and reused; consumers MUST register the
 /// provider as singleton (the default <c>AddOrionVaultHashiCorpVault</c> extension enforces this).
+/// <para>
+/// The concrete provider is a fixed unwrap-once snapshot and deliberately does NOT implement
+/// <see cref="IUnwrappedKeySource"/> (mirroring <c>AwsKmsKeyProvider</c> / <c>AzureKeyVaultKeyProvider</c>
+/// / <c>GcpKmsKeyProvider</c>). The refreshing envelope-key cache adapts a provider into an
+/// <see cref="IUnwrappedKeySource"/> via the static <see cref="CreateUnwrappedKeySource"/> seam,
+/// whose unwrap actually re-runs the Vault transit decrypt on every refresh.
+/// </para>
 /// </remarks>
-public sealed class HashiCorpVaultKeyProvider : IKeyProvider, IUnwrappedKeySource
+public sealed class HashiCorpVaultKeyProvider : IKeyProvider
 {
     private readonly FrozenDictionary<short, ReadOnlyMemory<byte>> keys;
 
@@ -77,9 +86,10 @@ public sealed class HashiCorpVaultKeyProvider : IKeyProvider, IUnwrappedKeySourc
     }
 
     /// <summary>
-    /// Decrypts every configured transit ciphertext entry. Shared by <see cref="CreateAsync"/>
-    /// (unwrap-once) and the envelope-key cache refresh path so both go through identical
-    /// validation.
+    /// Decrypts every configured transit ciphertext entry against the validated
+    /// <see cref="HashiCorpVaultKeyProviderOptions.TransitKeyName"/>. Shared by
+    /// <see cref="CreateAsync"/> (unwrap-once) and the envelope-key cache refresh path so both go
+    /// through identical validation. Static so it is callable before an instance exists.
     /// </summary>
     internal static async Task<IReadOnlyDictionary<short, ReadOnlyMemory<byte>>> UnwrapAllAsync(
         IVaultTransitDecryptClient decryptClient,
@@ -106,7 +116,23 @@ public sealed class HashiCorpVaultKeyProvider : IKeyProvider, IUnwrappedKeySourc
                     $"HashiCorpVaultKeyProvider: key id {id} ciphertext is null or whitespace.");
             }
 
-            var plaintext = await decryptClient.DecryptAsync(ciphertext, cancellationToken).ConfigureAwait(false);
+            byte[] plaintext;
+            try
+            {
+                plaintext = await decryptClient.DecryptAsync(ciphertext, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (TryClassify(ex) is { } classified)
+            {
+                // Translate the Vault transport fault into the cache's transient / revocation
+                // vocabulary, scoped to the failing key id, so the provider-agnostic cache can fail
+                // closed on a revoked / disabled transit key while still serving stale through a
+                // momentary Vault blip.
+                throw new KeyUnwrapException(
+                    classified.Kind,
+                    $"HashiCorpVaultKeyProvider: key id {id} transit decrypt failed. {classified.Message}",
+                    ex);
+            }
+
             if (plaintext is null || plaintext.Length == 0)
             {
                 throw new OrionVaultConfigurationException(
@@ -120,19 +146,49 @@ public sealed class HashiCorpVaultKeyProvider : IKeyProvider, IUnwrappedKeySourc
     }
 
     /// <summary>
-    /// Adapts a configured provider + decrypt client into an <see cref="IUnwrappedKeySource"/> the
-    /// core <see cref="Moongazing.OrionVault.Caching.CachingKeyProvider"/> refreshes against. Used
-    /// only on the opt-in caching path; the unwrap-once path never touches this.
+    /// Adapts a configured decrypt client + options into an <see cref="IUnwrappedKeySource"/> the
+    /// core <see cref="Moongazing.OrionVault.Caching.CachingKeyProvider"/> refreshes against. Each
+    /// refresh re-runs the Vault transit decrypt (it is NOT a cached snapshot), so a transit key
+    /// disabled / rotated / access-withdrawn mid-run is honoured. Used only on the opt-in caching
+    /// path; the unwrap-once path never touches this.
     /// </summary>
     public static IUnwrappedKeySource CreateUnwrappedKeySource(
         IVaultTransitDecryptClient decryptClient,
         HashiCorpVaultKeyProviderOptions options)
-        => new UnwrappedKeySource(decryptClient, options);
+    {
+        ArgumentNullException.ThrowIfNull(decryptClient);
+        ArgumentNullException.ThrowIfNull(options);
+        return new UnwrappedKeySource(decryptClient, options);
+    }
 
-    Task<IReadOnlyDictionary<short, ReadOnlyMemory<byte>>> IUnwrappedKeySource.UnwrapAllAsync(
-        CancellationToken cancellationToken)
-        => Task.FromResult<IReadOnlyDictionary<short, ReadOnlyMemory<byte>>>(
-            keys.ToDictionary(kvp => kvp.Key, kvp => kvp.Value));
+    /// <summary>
+    /// Maps a Vault API HTTP status onto the cache's transient-vs-revocation policy. A revocation-
+    /// class denial (transit key disabled / deleted, ciphertext no longer decryptable, or access
+    /// withdrawn: 400 / 401 / 403 / 404) must fail closed; everything else (5xx, 429 throttling,
+    /// 412 sealed / standby) is transient. A non-Vault exception is left unclassified (transient).
+    /// </summary>
+    internal static KeyUnwrapException? TryClassify(Exception ex)
+    {
+        if (ex is not VaultApiException vault)
+        {
+            return null;
+        }
+
+        var status = vault.HttpStatusCode;
+        var kind = status switch
+        {
+            HttpStatusCode.BadRequest => KeyUnwrapFailureKind.Revocation,
+            HttpStatusCode.Unauthorized => KeyUnwrapFailureKind.Revocation,
+            HttpStatusCode.Forbidden => KeyUnwrapFailureKind.Revocation,
+            HttpStatusCode.NotFound => KeyUnwrapFailureKind.Revocation,
+            _ => KeyUnwrapFailureKind.Transient,
+        };
+
+        return new KeyUnwrapException(
+            kind,
+            $"Vault transit decrypt failed with HTTP status {(int)status} ({status}).",
+            vault);
+    }
 
     private sealed class UnwrappedKeySource : IUnwrappedKeySource
     {

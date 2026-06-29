@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Moongazing.OrionVault.Abstractions;
 using Moongazing.OrionVault.Caching;
+using Moongazing.OrionVault.Exceptions;
 using VaultSharp;
 using VaultSharp.V1.SecretsEngines.Transit;
 
@@ -43,6 +44,15 @@ public static class HashiCorpVaultServiceCollectionExtensions
         {
             var opts = sp.GetRequiredService<IOptions<HashiCorpVaultKeyProviderOptions>>().Value;
             var vault = sp.GetRequiredService<IVaultClient>();
+
+            // Validate the transit key name before building the adapter so a blank name fails fast at
+            // composition with a clear OrionVault error rather than deeper in the Vault round-trip.
+            if (string.IsNullOrWhiteSpace(opts.TransitKeyName))
+            {
+                throw new OrionVaultConfigurationException(
+                    "HashiCorpVaultKeyProviderOptions.TransitKeyName must be a non-empty Vault transit key name.");
+            }
+
             var decryptClient = new VaultTransitDecryptAdapter(vault, opts.TransitKeyName, opts.MountPoint);
 
             if (opts.Cache.Enabled)

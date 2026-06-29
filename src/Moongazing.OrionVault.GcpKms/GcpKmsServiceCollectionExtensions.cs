@@ -6,6 +6,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Moongazing.OrionVault.Abstractions;
 using Moongazing.OrionVault.Caching;
+using Moongazing.OrionVault.Exceptions;
 
 /// <summary>
 /// DI helpers for the Google Cloud KMS-backed <see cref="IKeyProvider"/>.
@@ -43,7 +44,18 @@ public static class GcpKmsServiceCollectionExtensions
         {
             var opts = sp.GetRequiredService<IOptions<GcpKmsKeyProviderOptions>>().Value;
             var kms = sp.GetRequiredService<KeyManagementServiceClient>();
-            var decryptClient = new KeyManagementServiceDecryptAdapter(kms, opts.CryptoKeyName);
+
+            // Validate the crypto-key resource name before building the adapter so a malformed name
+            // fails fast at composition with a clear OrionVault error rather than deeper in the SDK.
+            if (string.IsNullOrWhiteSpace(opts.CryptoKeyName) || !CryptoKeyName.TryParse(opts.CryptoKeyName, out _))
+            {
+                throw new OrionVaultConfigurationException(
+                    "GcpKmsKeyProviderOptions.CryptoKeyName must be a valid Cloud KMS crypto-key resource name, " +
+                    "e.g. projects/{project}/locations/{location}/keyRings/{ring}/cryptoKeys/{key}; got " +
+                    $"'{opts.CryptoKeyName}'.");
+            }
+
+            var decryptClient = new KeyManagementServiceDecryptAdapter(kms);
 
             if (opts.Cache.Enabled)
             {
@@ -65,19 +77,16 @@ public static class GcpKmsServiceCollectionExtensions
     private sealed class KeyManagementServiceDecryptAdapter : IGcpKmsDecryptClient
     {
         private readonly KeyManagementServiceClient client;
-        private readonly CryptoKeyName cryptoKeyName;
 
-        public KeyManagementServiceDecryptAdapter(KeyManagementServiceClient client, string cryptoKeyName)
-        {
-            this.client = client;
-            // Parsed once; an invalid resource name fails fast here rather than per decrypt call.
-            this.cryptoKeyName = CryptoKeyName.Parse(cryptoKeyName);
-        }
+        public KeyManagementServiceDecryptAdapter(KeyManagementServiceClient client)
+            => this.client = client;
 
-        public async Task<byte[]> DecryptAsync(byte[] ciphertext, CancellationToken cancellationToken)
+        public async Task<byte[]> DecryptAsync(string cryptoKeyName, byte[] ciphertext, CancellationToken cancellationToken)
         {
+            // Decrypt under the crypto-key name supplied by the caller (the validated options value),
+            // so the same name the provider validated is the one KMS decrypts under.
             var response = await client.DecryptAsync(
-                cryptoKeyName,
+                CryptoKeyName.Parse(cryptoKeyName),
                 ByteString.CopyFrom(ciphertext),
                 cancellationToken).ConfigureAwait(false);
             return response.Plaintext.ToByteArray();

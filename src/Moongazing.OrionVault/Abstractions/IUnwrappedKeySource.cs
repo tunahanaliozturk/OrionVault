@@ -27,6 +27,14 @@ public interface IUnwrappedKeySource
     /// each call (the cache stores the result and replaces it wholesale on refresh) and MUST
     /// propagate transport / authorization failures so the cache can decide whether to keep
     /// serving the previous snapshot or fail.
+    /// <para>
+    /// Implementations SHOULD classify the failure for the cache by throwing a
+    /// <see cref="Moongazing.OrionVault.Exceptions.KeyUnwrapException"/> whose
+    /// <see cref="Moongazing.OrionVault.Exceptions.KeyUnwrapException.Kind"/> distinguishes a
+    /// transient fault (serve-stale eligible) from a revocation-class denial - key disabled /
+    /// revoked / not-found / access withdrawn - which the cache fails closed on. A failure raised
+    /// as any other exception type is treated as transient.
+    /// </para>
     /// </summary>
     Task<IReadOnlyDictionary<short, ReadOnlyMemory<byte>>> UnwrapAllAsync(CancellationToken cancellationToken);
 }

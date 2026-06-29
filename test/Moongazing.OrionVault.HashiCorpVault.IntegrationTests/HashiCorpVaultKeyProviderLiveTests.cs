@@ -7,8 +7,26 @@ using VaultSharp.V1.SecretsEngines.Transit;
 using Xunit;
 
 /// <summary>
-/// Live HashiCorp Vault integration tests against the transit secrets engine. Skipped locally
-/// unless the consumer sets the required environment variables:
+/// Marks a live Vault test that is reported as <em>Skipped</em> (not a vacuous pass) unless the
+/// connection environment variables are present. The skip reason is evaluated at discovery time, so
+/// a missing-config run shows these as genuinely skipped rather than green.
+/// </summary>
+internal sealed class SkipUnlessVaultConfiguredFactAttribute : Xunit.FactAttribute
+{
+    public SkipUnlessVaultConfiguredFactAttribute()
+    {
+        if (!HashiCorpVaultKeyProviderLiveTests.IsConfigured)
+        {
+            Skip = "Live Vault not configured: set ORIONVAULT_VAULT_ADDR, ORIONVAULT_VAULT_TOKEN, " +
+                "and ORIONVAULT_VAULT_TRANSIT_KEY to run.";
+        }
+    }
+}
+
+/// <summary>
+/// Live HashiCorp Vault integration tests against the transit secrets engine. Reported as Skipped
+/// (via <see cref="SkipUnlessVaultConfiguredFactAttribute"/>) - not a vacuous pass - unless the
+/// consumer sets the required environment variables:
 /// <list type="bullet">
 ///   <item><description><c>ORIONVAULT_VAULT_ADDR</c> - e.g. <c>http://127.0.0.1:8200</c>.</description></item>
 ///   <item><description><c>ORIONVAULT_VAULT_TOKEN</c> - a token with transit encrypt / decrypt on the key.</description></item>
@@ -56,13 +74,9 @@ public sealed class HashiCorpVaultKeyProviderLiveTests
         return response.Data.BatchedResults.First().CipherText;
     }
 
-    [Fact]
+    [SkipUnlessVaultConfiguredFact]
     public async Task CreateAsync_unwraps_two_keys_against_live_vault()
     {
-        if (!IsConfigured)
-        {
-            return; // Vacuous pass when env vars are absent; the real assertion only runs live.
-        }
         var client = BuildClient();
         var keyOne = Key32(0x11);
         var keyTwo = Key32(0x22);
@@ -84,13 +98,9 @@ public sealed class HashiCorpVaultKeyProviderLiveTests
         Assert.True(keyTwo.AsSpan().SequenceEqual(provider.TryGetKey(2)!.Value.Span));
     }
 
-    [Fact]
+    [SkipUnlessVaultConfiguredFact]
     public async Task CreateAsync_rejects_wrong_length_plaintext_against_live_vault()
     {
-        if (!IsConfigured)
-        {
-            return;
-        }
         var client = BuildClient();
         var sixteen = new byte[16];
         Array.Fill(sixteen, (byte)0x33);

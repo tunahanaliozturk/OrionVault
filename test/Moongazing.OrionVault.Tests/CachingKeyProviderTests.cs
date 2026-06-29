@@ -45,22 +45,30 @@ public sealed class CachingKeyProviderTests
             this.snapshotForCall = snapshotForCall;
         }
 
-        public int Calls { get; private set; }
+        private int calls;
+
+        // Read across threads in the concurrency tests, so the increment must be atomic and the
+        // read must observe the published value rather than a torn / cached one.
+        public int Calls => Volatile.Read(ref calls);
 
         public short ActiveKeyId { get; }
 
         public Func<int, Exception?>? ThrowOnCall { get; set; }
 
+        // Optional gate: lets a test hold the in-flight refresh open while other readers race.
+        public ManualResetEventSlim? BlockOnCall { get; set; }
+
         public Task<IReadOnlyDictionary<short, ReadOnlyMemory<byte>>> UnwrapAllAsync(
             CancellationToken cancellationToken)
         {
-            Calls++;
-            var ex = ThrowOnCall?.Invoke(Calls);
+            var call = Interlocked.Increment(ref calls);
+            BlockOnCall?.Wait(cancellationToken);
+            var ex = ThrowOnCall?.Invoke(call);
             if (ex is not null)
             {
                 return Task.FromException<IReadOnlyDictionary<short, ReadOnlyMemory<byte>>>(ex);
             }
-            return Task.FromResult(snapshotForCall(Calls));
+            return Task.FromResult(snapshotForCall(call));
         }
     }
 
@@ -247,5 +255,103 @@ public sealed class CachingKeyProviderTests
         });
 
         Assert.Equal(1, source.Calls);
+    }
+
+    [Fact]
+    public void Fails_closed_on_revocation_even_when_serve_stale_enabled()
+    {
+        var time = new ManualTimeProvider(DateTimeOffset.UnixEpoch);
+        var source = new CountingSource(1, _ => new Dictionary<short, ReadOnlyMemory<byte>> { [1] = Key32(0x11) })
+        {
+            // First unwrap succeeds; the refresh raises a REVOCATION-class failure.
+            ThrowOnCall = call => call >= 2
+                ? new KeyUnwrapException(KeyUnwrapFailureKind.Revocation, "key revoked")
+                : null,
+        };
+        using var sut = new CachingKeyProvider(source, Enabled(TimeSpan.FromMinutes(15), serveStale: true), time);
+
+        sut.TryGetKey(1); // prime ok
+        time.Advance(TimeSpan.FromMinutes(20));
+
+        // Serve-stale is ON, but a revocation must NOT serve the cached key: it fails closed.
+        var ex = Assert.Throws<KeyUnwrapException>(() => sut.TryGetKey(1));
+        Assert.Equal(KeyUnwrapFailureKind.Revocation, ex.Kind);
+    }
+
+    [Fact]
+    public void Transient_failure_serves_stale_but_revocation_does_not()
+    {
+        // A transient KeyUnwrapException is serve-stale eligible; only Revocation fails closed.
+        var time = new ManualTimeProvider(DateTimeOffset.UnixEpoch);
+        var source = new CountingSource(1, _ => new Dictionary<short, ReadOnlyMemory<byte>> { [1] = Key32(0x11) })
+        {
+            ThrowOnCall = call => call >= 2
+                ? new KeyUnwrapException(KeyUnwrapFailureKind.Transient, "kms unreachable")
+                : null,
+        };
+        using var sut = new CachingKeyProvider(source, Enabled(TimeSpan.FromMinutes(15), serveStale: true), time);
+
+        Assert.True(Key32(0x11).AsSpan().SequenceEqual(sut.TryGetKey(1)!.Value.Span));
+        time.Advance(TimeSpan.FromMinutes(20));
+        Assert.True(Key32(0x11).AsSpan().SequenceEqual(sut.TryGetKey(1)!.Value.Span));
+    }
+
+    [Fact]
+    public async Task Concurrent_readers_during_a_refresh_are_not_blocked_and_serve_the_current_snapshot()
+    {
+        var time = new ManualTimeProvider(DateTimeOffset.UnixEpoch);
+        using var gate = new ManualResetEventSlim(initialState: false);
+        var source = new CountingSource(1, call => new Dictionary<short, ReadOnlyMemory<byte>>
+        {
+            [1] = call == 1 ? Key32(0x11) : Key32(0x22),
+        });
+        using var sut = new CachingKeyProvider(source, Enabled(TimeSpan.FromMinutes(15)), time);
+
+        // Prime with the first snapshot (0x11), then expire it so the next read refreshes.
+        Assert.True(Key32(0x11).AsSpan().SequenceEqual(sut.TryGetKey(1)!.Value.Span));
+        Assert.Equal(1, source.Calls);
+        time.Advance(TimeSpan.FromMinutes(20));
+
+        // Hold the refresh open on the second unwrap so it is genuinely in flight while we race.
+        source.BlockOnCall = gate;
+
+        // One thread wins the gate and blocks inside the refresh.
+        var refresher = Task.Run(() => sut.TryGetKey(1));
+
+        // Wait until the refresh has actually entered the unwrap (call 2 started).
+        var spin = new SpinWait();
+        while (source.Calls < 2)
+        {
+            spin.SpinOnce();
+        }
+
+        // While that refresh is parked, other readers must NOT queue behind it: they get served
+        // the current (stale 0x11) snapshot immediately. A bounded wait proves non-blocking.
+        var readers = new Task<bool>[16];
+        for (var i = 0; i < readers.Length; i++)
+        {
+            readers[i] = Task.Run(() =>
+            {
+                var key = sut.TryGetKey(1);
+                return key is not null && Key32(0x11).AsSpan().SequenceEqual(key.Value.Span);
+            });
+        }
+
+        var all = Task.WhenAll(readers);
+        var finished = await Task.WhenAny(all, Task.Delay(TimeSpan.FromSeconds(5))).ConfigureAwait(true);
+        Assert.True(ReferenceEquals(finished, all),
+            "Readers blocked behind the in-flight refresh instead of serving the stale snapshot.");
+        Assert.All(await all.ConfigureAwait(true), served => Assert.True(served));
+
+        // No extra unwraps were triggered by the racing readers (single-flight held).
+        Assert.Equal(2, source.Calls);
+
+        // Release the refresh; it publishes the rotated key.
+        gate.Set();
+        var refreshed = await Task.WhenAny(refresher, Task.Delay(TimeSpan.FromSeconds(5))).ConfigureAwait(true);
+        Assert.True(ReferenceEquals(refreshed, refresher), "Refresh did not complete after the gate was released.");
+        await refresher.ConfigureAwait(true);
+        Assert.True(Key32(0x22).AsSpan().SequenceEqual(sut.TryGetKey(1)!.Value.Span));
+        Assert.Equal(2, source.Calls);
     }
 }

@@ -30,11 +30,22 @@ public sealed class EnvelopeKeyCacheOptions
     public TimeSpan Ttl { get; set; } = TimeSpan.FromMinutes(15);
 
     /// <summary>
-    /// When a refresh fails (KMS unreachable, throttled, a transient authorization blip) and a
-    /// previously unwrapped snapshot is still in hand, keep serving that snapshot rather than
-    /// surfacing the failure. Defaults to <c>true</c> so a momentary KMS outage does not take the
-    /// application's decrypt path down. The very first unwrap (no snapshot yet) always propagates
-    /// its failure regardless of this flag. Set to <c>false</c> to fail closed instead.
+    /// When a TRANSIENT refresh failure (KMS unreachable, throttled, deadline exceeded, a momentary
+    /// service blip) occurs and a previously unwrapped snapshot is still in hand, keep serving that
+    /// snapshot rather than surfacing the failure. Defaults to <c>true</c> so a momentary KMS outage
+    /// does not take the application's decrypt path down.
+    /// <para>
+    /// This flag applies to transient faults ONLY. A revocation-class failure - the key was
+    /// disabled, revoked, deleted / not-found, or access to it was withdrawn (permission denied /
+    /// unauthenticated), surfaced by a provider as a
+    /// <see cref="Moongazing.OrionVault.Exceptions.KeyUnwrapException"/> of kind
+    /// <see cref="Moongazing.OrionVault.Exceptions.KeyUnwrapFailureKind.Revocation"/> - ALWAYS fails
+    /// closed regardless of this flag: serving a cached key the KMS has explicitly stopped honouring
+    /// would let a revoked key keep decrypting until the TTL happened to lapse, defeating the point
+    /// of envelope encryption.
+    /// </para>
+    /// The very first unwrap (no snapshot yet) always propagates its failure regardless of this
+    /// flag. Set to <c>false</c> to fail closed on transient failures too.
     /// </summary>
     public bool ServeStaleOnRefreshFailure { get; set; } = true;
 

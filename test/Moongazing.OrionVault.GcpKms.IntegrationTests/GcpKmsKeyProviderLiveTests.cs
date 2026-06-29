@@ -56,7 +56,7 @@ public sealed class GcpKmsKeyProviderLiveTests
         options.WrappedKeys[1] = await WrapAsync(kms, keyOne);
         options.WrappedKeys[2] = await WrapAsync(kms, keyTwo);
 
-        var decrypt = new LiveDecryptAdapter(kms, CryptoKey!);
+        var decrypt = new LiveDecryptAdapter(kms);
         var provider = await GcpKmsKeyProvider.CreateAsync(decrypt, options);
 
         Assert.Equal(2, provider.ActiveKeyId);
@@ -78,7 +78,7 @@ public sealed class GcpKmsKeyProviderLiveTests
         var options = new GcpKmsKeyProviderOptions { CryptoKeyName = CryptoKey!, ActiveKeyId = 1 };
         options.WrappedKeys[1] = await WrapAsync(kms, sixteen);
 
-        var decrypt = new LiveDecryptAdapter(kms, CryptoKey!);
+        var decrypt = new LiveDecryptAdapter(kms);
         await Assert.ThrowsAsync<Moongazing.OrionVault.Exceptions.OrionVaultConfigurationException>(
             () => GcpKmsKeyProvider.CreateAsync(decrypt, options));
     }
@@ -86,17 +86,14 @@ public sealed class GcpKmsKeyProviderLiveTests
     private sealed class LiveDecryptAdapter : IGcpKmsDecryptClient
     {
         private readonly KeyManagementServiceClient client;
-        private readonly CryptoKeyName cryptoKeyName;
 
-        public LiveDecryptAdapter(KeyManagementServiceClient client, string cryptoKeyName)
-        {
-            this.client = client;
-            this.cryptoKeyName = CryptoKeyName.Parse(cryptoKeyName);
-        }
+        public LiveDecryptAdapter(KeyManagementServiceClient client)
+            => this.client = client;
 
-        public async Task<byte[]> DecryptAsync(byte[] ciphertext, CancellationToken cancellationToken)
+        public async Task<byte[]> DecryptAsync(string cryptoKeyName, byte[] ciphertext, CancellationToken cancellationToken)
         {
-            var response = await client.DecryptAsync(cryptoKeyName, ByteString.CopyFrom(ciphertext), cancellationToken);
+            var response = await client.DecryptAsync(
+                CryptoKeyName.Parse(cryptoKeyName), ByteString.CopyFrom(ciphertext), cancellationToken);
             return response.Plaintext.ToByteArray();
         }
     }

@@ -18,9 +18,18 @@ using Moongazing.OrionVault.Exceptions;
 /// <item>Exactly one unwrapped snapshot is held at a time (bounded: O(number of configured keys)).
 /// A refresh builds a new immutable <see cref="FrozenDictionary{TKey,TValue}"/> and swaps the
 /// volatile reference atomically; readers never observe a half-built map.</item>
-/// <item>Single-flight: a <see cref="SemaphoreSlim"/> serialises refreshes so a burst of stale
-/// reads triggers exactly one KMS round-trip, not one per caller. While a refresh is in flight,
-/// other callers that already hold a (stale) snapshot keep serving it.</item>
+/// <item>Single-flight, non-blocking reads: a <see cref="SemaphoreSlim"/> serialises refreshes so a
+/// burst of stale reads triggers exactly one KMS round-trip, not one per caller. Crucially, a
+/// reader that already holds a (stale) snapshot does NOT queue behind the in-flight refresh: it
+/// fails the non-blocking gate acquisition and serves the current snapshot immediately. Only the
+/// single thread that wins the gate waits on the KMS round-trip; everyone else keeps serving the
+/// last-good keys until that thread publishes the fresh snapshot. The sole blocking path is the
+/// cold start (no snapshot yet), where callers must wait for the very first unwrap.</item>
+/// <item>Failure policy: a transient refresh failure with a snapshot in hand keeps serving the
+/// stale snapshot when <see cref="EnvelopeKeyCacheOptions.ServeStaleOnRefreshFailure"/> is set; a
+/// revocation-class failure (key disabled / revoked / not-found / access withdrawn, surfaced as a
+/// <see cref="KeyUnwrapException"/> of kind <see cref="KeyUnwrapFailureKind.Revocation"/>) always
+/// fails closed regardless of that flag.</item>
 /// <item>Time is read through an injected <see cref="System.TimeProvider"/> so TTL expiry is
 /// deterministic under test.</item>
 /// </list>
@@ -95,19 +104,45 @@ public sealed class CachingKeyProvider : IKeyProvider, IDisposable
             return snapshot;
         }
 
-        // Either no snapshot yet (cold) or the held one is stale. Serialise the refresh so only
-        // one caller round-trips the KMS; the rest re-read the freshly published snapshot.
+        // The held snapshot is stale (or there is none yet). Single-flight the refresh.
+        if (snapshot is not null)
+        {
+            // We already have a (stale) snapshot to fall back on, so DO NOT block behind an
+            // in-flight refresh. Try to win the gate without waiting: if another caller is already
+            // refreshing, serve the current snapshot immediately instead of queueing.
+            if (!refreshGate.Wait(0))
+            {
+                return current ?? snapshot;
+            }
+
+            try
+            {
+                // Re-check under the gate: another caller may have refreshed while we waited.
+                var latest = current;
+                if (latest is not null && !IsExpired(latest))
+                {
+                    return latest;
+                }
+
+                return Refresh(previous: latest);
+            }
+            finally
+            {
+                refreshGate.Release();
+            }
+        }
+
+        // Cold start: no snapshot to serve, so callers must wait for the first unwrap.
         refreshGate.Wait();
         try
         {
-            // Re-check under the gate: another caller may have refreshed while we waited.
-            snapshot = current;
-            if (snapshot is not null && !IsExpired(snapshot))
+            var latest = current;
+            if (latest is not null && !IsExpired(latest))
             {
-                return snapshot;
+                return latest;
             }
 
-            return Refresh(previous: snapshot);
+            return Refresh(previous: latest);
         }
         finally
         {
@@ -126,15 +161,17 @@ public sealed class CachingKeyProvider : IKeyProvider, IDisposable
             // flight gate guarantees only one such blocking call is outstanding at a time.
             unwrapped = source.UnwrapAllAsync(CancellationToken.None).GetAwaiter().GetResult();
         }
-        catch (Exception ex) when (previous is not null && serveStaleOnRefreshFailure)
+        catch (Exception ex) when (CanServeStale(previous, ex))
         {
-            // Keep serving the previous snapshot through a transient KMS failure, but do not
+            // Keep serving the previous snapshot through a TRANSIENT KMS failure, but do not
             // reset its timestamp: the next lookup will attempt another refresh. We deliberately
             // do not rethrow. The exception detail is intentionally not swallowed silently in
             // production wiring, where an IKeyRotationObserver / logging adapter can be layered;
-            // here, failing open to the last-good keys is the documented policy.
+            // here, failing open to the last-good keys is the documented policy for transient
+            // faults. A revocation-class failure is excluded by CanServeStale and propagates,
+            // so a disabled / revoked / withdrawn key stops decrypting immediately.
             _ = ex;
-            return previous;
+            return previous!;
         }
 
         var validated = Validate(unwrapped);
@@ -142,6 +179,23 @@ public sealed class CachingKeyProvider : IKeyProvider, IDisposable
         current = fresh;
         return fresh;
     }
+
+    // Stale serving is allowed only when we have a previous snapshot, the policy permits it, and
+    // the failure is NOT a revocation-class denial. A revoked / disabled / not-found / access-
+    // withdrawn key must fail closed: serving the cached plaintext past an explicit KMS denial
+    // would let a key keep decrypting after it was meant to stop.
+    private bool CanServeStale(Snapshot? previous, Exception ex)
+    {
+        if (previous is null || !serveStaleOnRefreshFailure)
+        {
+            return false;
+        }
+
+        return !IsRevocation(ex);
+    }
+
+    private static bool IsRevocation(Exception ex)
+        => ex is KeyUnwrapException { Kind: KeyUnwrapFailureKind.Revocation };
 
     private FrozenDictionary<short, ReadOnlyMemory<byte>> Validate(
         IReadOnlyDictionary<short, ReadOnlyMemory<byte>> unwrapped)

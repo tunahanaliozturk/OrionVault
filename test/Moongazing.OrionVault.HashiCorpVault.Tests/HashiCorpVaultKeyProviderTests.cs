@@ -1,8 +1,12 @@
 namespace Moongazing.OrionVault.HashiCorpVault.Tests;
 
+using System.Net;
+using Moongazing.OrionVault.Abstractions;
+using Moongazing.OrionVault.Caching;
 using Moongazing.OrionVault.Exceptions;
 using Moongazing.OrionVault.HashiCorpVault;
 using Moq;
+using VaultSharp.Core;
 using Xunit;
 
 public sealed class HashiCorpVaultKeyProviderTests
@@ -52,6 +56,15 @@ public sealed class HashiCorpVaultKeyProviderTests
         Assert.Equal(1, sut.KeyCount);
         Assert.True(keyOne.AsSpan().SequenceEqual(sut.TryGetKey(1)!.Value.Span));
         Assert.Null(sut.TryGetKey(99));
+    }
+
+    [Fact]
+    public void Provider_does_not_implement_IUnwrappedKeySource_directly()
+    {
+        // The caching layer adapts a raw provider via CreateUnwrappedKeySource; the concrete
+        // provider must NOT itself be an IUnwrappedKeySource (mirroring AWS / Azure / GCP shape).
+        var sut = new HashiCorpVaultKeyProvider(1, new Dictionary<short, ReadOnlyMemory<byte>> { [1] = Key32(0x11) });
+        Assert.IsNotAssignableFrom<IUnwrappedKeySource>(sut);
     }
 
     [Fact]
@@ -149,5 +162,105 @@ public sealed class HashiCorpVaultKeyProviderTests
 
         await Assert.ThrowsAsync<InvalidOperationException>(
             () => HashiCorpVaultKeyProvider.CreateAsync(client.Object, opts));
+    }
+
+    [Fact]
+    public async Task CreateAsync_translates_revoked_transit_key_into_revocation_KeyUnwrapException()
+    {
+        var client = new Mock<IVaultTransitDecryptClient>();
+        client.Setup(c => c.DecryptAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new VaultApiException(HttpStatusCode.Forbidden, "permission denied"));
+
+        var opts = new HashiCorpVaultKeyProviderOptions { TransitKeyName = "orionvault", ActiveKeyId = 1 };
+        opts.WrappedKeys[1] = "vault:v1:ct1";
+
+        var ex = await Assert.ThrowsAsync<KeyUnwrapException>(
+            () => HashiCorpVaultKeyProvider.CreateAsync(client.Object, opts));
+        Assert.Equal(KeyUnwrapFailureKind.Revocation, ex.Kind);
+        Assert.Contains("key id 1", ex.Message, StringComparison.Ordinal);
+    }
+
+    // ---- classification ----
+
+    [Theory]
+    [InlineData(HttpStatusCode.BadRequest)]
+    [InlineData(HttpStatusCode.Unauthorized)]
+    [InlineData(HttpStatusCode.Forbidden)]
+    [InlineData(HttpStatusCode.NotFound)]
+    public void TryClassify_maps_revocation_class_statuses_to_Revocation(HttpStatusCode status)
+    {
+        var classified = HashiCorpVaultKeyProvider.TryClassify(new VaultApiException(status, "denied"));
+        Assert.NotNull(classified);
+        Assert.Equal(KeyUnwrapFailureKind.Revocation, classified!.Kind);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.InternalServerError)]
+    [InlineData(HttpStatusCode.ServiceUnavailable)]
+    [InlineData(HttpStatusCode.TooManyRequests)]
+    [InlineData(HttpStatusCode.PreconditionFailed)]
+    public void TryClassify_maps_other_statuses_to_Transient(HttpStatusCode status)
+    {
+        var classified = HashiCorpVaultKeyProvider.TryClassify(new VaultApiException(status, "blip"));
+        Assert.NotNull(classified);
+        Assert.Equal(KeyUnwrapFailureKind.Transient, classified!.Kind);
+    }
+
+    [Fact]
+    public void TryClassify_returns_null_for_non_vault_exception()
+        => Assert.Null(HashiCorpVaultKeyProvider.TryClassify(new InvalidOperationException("not vault")));
+
+    // ---- cache-source seam ----
+
+    [Fact]
+    public void CreateUnwrappedKeySource_null_guards_its_arguments()
+    {
+        var opts = new HashiCorpVaultKeyProviderOptions { TransitKeyName = "orionvault", ActiveKeyId = 1 };
+        Assert.Throws<ArgumentNullException>(
+            () => HashiCorpVaultKeyProvider.CreateUnwrappedKeySource(null!, opts));
+        Assert.Throws<ArgumentNullException>(
+            () => HashiCorpVaultKeyProvider.CreateUnwrappedKeySource(Mock.Of<IVaultTransitDecryptClient>(), null!));
+    }
+
+    [Fact]
+    public void Cache_fails_closed_when_refresh_hits_a_revoked_transit_key_even_with_serve_stale()
+    {
+        var time = new ManualTimeProvider(DateTimeOffset.UnixEpoch);
+        var client = new Mock<IVaultTransitDecryptClient>();
+        var calls = 0;
+        client.Setup(c => c.DecryptAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .Returns(() =>
+            {
+                var call = Interlocked.Increment(ref calls);
+                return call == 1
+                    ? Task.FromResult(Key32(0x11))
+                    : Task.FromException<byte[]>(new VaultApiException(HttpStatusCode.Forbidden, "revoked"));
+            });
+
+        var opts = new HashiCorpVaultKeyProviderOptions { TransitKeyName = "orionvault", ActiveKeyId = 1 };
+        opts.WrappedKeys[1] = "vault:v1:ct1";
+
+        var source = HashiCorpVaultKeyProvider.CreateUnwrappedKeySource(client.Object, opts);
+        using var cache = new CachingKeyProvider(
+            source,
+            new EnvelopeKeyCacheOptions { Enabled = true, Ttl = TimeSpan.FromMinutes(15), ServeStaleOnRefreshFailure = true },
+            time);
+
+        Assert.NotNull(cache.TryGetKey(1)); // prime ok
+        time.Advance(TimeSpan.FromMinutes(20));
+
+        var ex = Assert.Throws<KeyUnwrapException>(() => cache.TryGetKey(1));
+        Assert.Equal(KeyUnwrapFailureKind.Revocation, ex.Kind);
+    }
+
+    private sealed class ManualTimeProvider : TimeProvider
+    {
+        private DateTimeOffset now;
+
+        public ManualTimeProvider(DateTimeOffset start) => now = start;
+
+        public override DateTimeOffset GetUtcNow() => now;
+
+        public void Advance(TimeSpan by) => now += by;
     }
 }

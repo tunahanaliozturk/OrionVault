@@ -17,9 +17,13 @@ public interface IVaultTransitDecryptClient
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The plaintext data key bytes.</returns>
     /// <remarks>
-    /// Implementations should propagate transport / Vault errors to the caller; OrionVault surfaces
-    /// them as <see cref="Moongazing.OrionVault.Exceptions.OrionVaultConfigurationException"/> at
-    /// startup so a misconfigured deployment fails fast.
+    /// Implementations should propagate transport / Vault errors to the caller; a revocation-class
+    /// denial (transit key disabled / deleted, ciphertext no longer decryptable, or access withdrawn)
+    /// should surface so the provider can translate it into a
+    /// <see cref="Moongazing.OrionVault.Exceptions.KeyUnwrapException"/> for the envelope-key cache,
+    /// and OrionVault surfaces a startup failure as
+    /// <see cref="Moongazing.OrionVault.Exceptions.OrionVaultConfigurationException"/> so a
+    /// misconfigured deployment fails fast.
     /// </remarks>
     Task<byte[]> DecryptAsync(string ciphertext, CancellationToken cancellationToken);
 }

@@ -1,6 +1,7 @@
 namespace Moongazing.OrionVault.GcpKms;
 
 using System.Collections.Frozen;
+using Grpc.Core;
 using Moongazing.OrionVault.Abstractions;
 using Moongazing.OrionVault.Exceptions;
 
@@ -16,8 +17,15 @@ using Moongazing.OrionVault.Exceptions;
 /// map until rows encrypted under them are re-encrypted by the v0.2.0 background re-encryption
 /// service. Each entry's plaintext is held in memory once and reused; consumers MUST register the
 /// provider as singleton (the default <c>AddOrionVaultGcpKms</c> extension enforces this).
+/// <para>
+/// The concrete provider is a fixed unwrap-once snapshot and deliberately does NOT implement
+/// <see cref="IUnwrappedKeySource"/> (mirroring <c>AwsKmsKeyProvider</c> / <c>AzureKeyVaultKeyProvider</c>).
+/// The refreshing envelope-key cache adapts a provider into an <see cref="IUnwrappedKeySource"/> via
+/// the static <see cref="CreateUnwrappedKeySource"/> seam, whose unwrap actually re-runs the KMS
+/// decrypt on every refresh.
+/// </para>
 /// </remarks>
-public sealed class GcpKmsKeyProvider : IKeyProvider, IUnwrappedKeySource
+public sealed class GcpKmsKeyProvider : IKeyProvider
 {
     private readonly FrozenDictionary<short, ReadOnlyMemory<byte>> keys;
 
@@ -77,9 +85,11 @@ public sealed class GcpKmsKeyProvider : IKeyProvider, IUnwrappedKeySource
     }
 
     /// <summary>
-    /// Decodes and decrypts every configured ciphertext entry. Shared by <see cref="CreateAsync"/>
+    /// Decodes and decrypts every configured ciphertext entry against the validated
+    /// <see cref="GcpKmsKeyProviderOptions.CryptoKeyName"/>. Shared by <see cref="CreateAsync"/>
     /// (unwrap-once) and the envelope-key cache refresh path so both go through identical
-    /// validation. Static so it is callable before an instance exists.
+    /// validation and both decrypt under the exact configured crypto-key name. Static so it is
+    /// callable before an instance exists.
     /// </summary>
     internal static async Task<IReadOnlyDictionary<short, ReadOnlyMemory<byte>>> UnwrapAllAsync(
         IGcpKmsDecryptClient decryptClient,
@@ -97,6 +107,7 @@ public sealed class GcpKmsKeyProvider : IKeyProvider, IUnwrappedKeySource
                 "GcpKmsKeyProviderOptions.CryptoKeyName must be a non-empty Cloud KMS crypto-key resource name.");
         }
 
+        var cryptoKeyName = options.CryptoKeyName;
         var tasks = options.WrappedKeys.Select(async pair =>
         {
             var (id, ciphertextBase64) = pair;
@@ -121,7 +132,9 @@ public sealed class GcpKmsKeyProvider : IKeyProvider, IUnwrappedKeySource
                     $"GcpKmsKeyProvider: key id {id} ciphertext decoded to zero bytes.");
             }
 
-            var plaintext = await decryptClient.DecryptAsync(ciphertext, cancellationToken).ConfigureAwait(false);
+            // Pass the validated crypto-key name into the actual Decrypt request so the name the
+            // provider validated is exactly the name KMS decrypts under.
+            var plaintext = await decryptClient.DecryptAsync(cryptoKeyName, ciphertext, cancellationToken).ConfigureAwait(false);
             return (id, plaintext: (ReadOnlyMemory<byte>)plaintext);
         }).ToArray();
 
@@ -130,19 +143,50 @@ public sealed class GcpKmsKeyProvider : IKeyProvider, IUnwrappedKeySource
     }
 
     /// <summary>
-    /// Adapts a configured provider + decrypt client into an <see cref="IUnwrappedKeySource"/> the
-    /// core <see cref="Moongazing.OrionVault.Caching.CachingKeyProvider"/> refreshes against. Used
-    /// only on the opt-in caching path; the unwrap-once path never touches this.
+    /// Adapts a configured decrypt client + options into an <see cref="IUnwrappedKeySource"/> the
+    /// core <see cref="Moongazing.OrionVault.Caching.CachingKeyProvider"/> refreshes against. Each
+    /// refresh re-runs the KMS decrypt (it is NOT a cached snapshot), so a Cloud KMS key disabled /
+    /// revoked / rotated mid-run is honoured. Used only on the opt-in caching path; the unwrap-once
+    /// path never touches this.
     /// </summary>
     public static IUnwrappedKeySource CreateUnwrappedKeySource(
         IGcpKmsDecryptClient decryptClient,
         GcpKmsKeyProviderOptions options)
-        => new UnwrappedKeySource(decryptClient, options);
+    {
+        ArgumentNullException.ThrowIfNull(decryptClient);
+        ArgumentNullException.ThrowIfNull(options);
+        return new UnwrappedKeySource(decryptClient, options);
+    }
 
-    Task<IReadOnlyDictionary<short, ReadOnlyMemory<byte>>> IUnwrappedKeySource.UnwrapAllAsync(
-        CancellationToken cancellationToken)
-        => Task.FromResult<IReadOnlyDictionary<short, ReadOnlyMemory<byte>>>(
-            keys.ToDictionary(kvp => kvp.Key, kvp => kvp.Value));
+    /// <summary>
+    /// Maps a Cloud KMS gRPC status onto the cache's transient-vs-revocation policy. A revocation-
+    /// class denial (key disabled / destroyed / not-found / permission withdrawn) must fail closed;
+    /// everything else (unavailable, deadline, throttling, transient internal errors) is transient.
+    /// </summary>
+    internal static KeyUnwrapException? TryClassify(Exception ex)
+    {
+        if (ex is not RpcException rpc)
+        {
+            return null;
+        }
+
+        var kind = rpc.StatusCode switch
+        {
+            StatusCode.PermissionDenied => KeyUnwrapFailureKind.Revocation,
+            StatusCode.Unauthenticated => KeyUnwrapFailureKind.Revocation,
+            StatusCode.NotFound => KeyUnwrapFailureKind.Revocation,
+            // A disabled / destroyed / pending-import crypto-key version decrypts with
+            // FAILED_PRECONDITION; an invalid-for-this-key ciphertext with INVALID_ARGUMENT.
+            StatusCode.FailedPrecondition => KeyUnwrapFailureKind.Revocation,
+            StatusCode.InvalidArgument => KeyUnwrapFailureKind.Revocation,
+            _ => KeyUnwrapFailureKind.Transient,
+        };
+
+        return new KeyUnwrapException(
+            kind,
+            $"GCP KMS decrypt failed with gRPC status {rpc.StatusCode}: {rpc.Status.Detail}",
+            rpc);
+    }
 
     private sealed class UnwrappedKeySource : IUnwrappedKeySource
     {
@@ -157,8 +201,21 @@ public sealed class GcpKmsKeyProvider : IKeyProvider, IUnwrappedKeySource
 
         public short ActiveKeyId => options.ActiveKeyId;
 
-        public Task<IReadOnlyDictionary<short, ReadOnlyMemory<byte>>> UnwrapAllAsync(
+        public async Task<IReadOnlyDictionary<short, ReadOnlyMemory<byte>>> UnwrapAllAsync(
             CancellationToken cancellationToken)
-            => GcpKmsKeyProvider.UnwrapAllAsync(decryptClient, options, cancellationToken);
+        {
+            try
+            {
+                return await GcpKmsKeyProvider
+                    .UnwrapAllAsync(decryptClient, options, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex) when (TryClassify(ex) is { } classified)
+            {
+                // Translate the cloud-SDK gRPC fault into the cache's transient / revocation
+                // vocabulary so the provider-agnostic cache can fail closed on a revoked key.
+                throw classified;
+            }
+        }
     }
 }
