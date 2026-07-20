@@ -6,7 +6,7 @@ All notable changes to OrionVault are recorded here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
-## [0.4.0] - 2026-06-28
+## [0.4.0] - 2026-07-20
 
 ### Security
 
