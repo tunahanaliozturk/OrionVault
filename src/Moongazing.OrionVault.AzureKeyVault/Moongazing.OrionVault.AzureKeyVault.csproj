@@ -1,7 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFrameworks>net8.0;net9.0;net10.0</TargetFrameworks>
-    <IsPackable>true</IsPackable>
+    <!-- Held from the 0.4.0 publish: this is a new package id (OrionVault.AzureKeyVault) not yet
+         published to NuGet. Flip to true to ship it on the next release. See CHANGELOG. -->
+    <IsPackable>false</IsPackable>
     <PackageId>OrionVault.AzureKeyVault</PackageId>
     <Description>Azure Key Vault key provider for OrionVault. Wraps OrionVault's symmetric data keys with an Azure Key Vault KEK (RSA or AES-KW), keeping the master key inside the vault. Data keys are unwrapped once at host startup and cached in process memory for the provider lifetime.</Description>
     <PackageTags>encryption;azure;key-vault;envelope-encryption;orionvault</PackageTags>

@@ -6,7 +6,15 @@ All notable changes to OrionVault are recorded here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
-## [0.4.0] - 2026-06-28
+## [0.4.0] - 2026-07-20
+
+> **Publish note.** This release ships the three already-published packages — `OrionVault`,
+> `OrionVault.EntityFrameworkCore`, and `OrionVault.Testing`. The four cloud key-provider
+> packages added in this version — `OrionVault.AwsKms`, `OrionVault.AzureKeyVault`,
+> `OrionVault.GcpKms`, and `OrionVault.HashiCorpVault` — are new package ids and are held from
+> this publish; each is marked `IsPackable=false` with a pointer here and will be published in a
+> later release. Their source and features below are complete and usable from a project
+> reference in the meantime.
 
 ### Security
 
