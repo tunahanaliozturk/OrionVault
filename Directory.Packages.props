@@ -1,6 +1,12 @@
 <Project>
   <PropertyGroup>
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <!--
+      Lets a PackageVersion below pin a package we only pull in transitively, without having to
+      add a fake direct PackageReference to the project that drags it in. This is how the
+      security pins in the last ItemGroup take effect.
+    -->
+    <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
   </PropertyGroup>
   <ItemGroup>
     <PackageVersion Include="Microsoft.EntityFrameworkCore" Version="8.0.10" />
@@ -29,5 +35,31 @@
     <PackageVersion Include="VaultSharp" Version="1.17.5.1" />
     <PackageVersion Include="Moq" Version="4.20.72" />
     <PackageVersion Include="Testcontainers.LocalStack" Version="3.10.0" />
+  </ItemGroup>
+  <!--
+    Security pins for packages we do not reference directly. Each one is a transitive dependency
+    that resolved to a version carrying an advisory; the pin lifts it to the patched release.
+    Review these whenever a direct dependency moves - once the parent package ships a graph that
+    already resolves above the pin, the entry here is dead weight and should be removed.
+  -->
+  <ItemGroup Label="Security pins">
+    <!--
+      GHSA-447r-wph3-92pm (High): DoS in ASN.1 decoding. Reaches the analyzer test project
+      through Microsoft.CodeAnalysis.*.Analyzer.Testing -> NuGet.Packaging ->
+      System.Security.Cryptography.Pkcs, which resolves 5.0.0. Fixed in 5.0.1; pinned to the
+      current 8.x servicing release to stay in band with the repo's net8.0 targets.
+    -->
+    <PackageVersion Include="System.Formats.Asn1" Version="8.0.2" />
+    <!--
+      GHSA-2m69-gcr7-jv3q (High): the bundled SQLite native library. Reaches the sample and the
+      EF Core test projects through Microsoft.EntityFrameworkCore.Sqlite -> Microsoft.Data.Sqlite
+      -> SQLitePCLRaw.bundle_e_sqlite3, which resolves 2.1.6. Fixed in 2.1.12. The bundle, core,
+      and provider packages are pinned alongside the native lib so the four stay on one version
+      rather than being mixed across the 2.1.6/2.1.12 boundary.
+    -->
+    <PackageVersion Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.12" />
+    <PackageVersion Include="SQLitePCLRaw.core" Version="2.1.12" />
+    <PackageVersion Include="SQLitePCLRaw.lib.e_sqlite3" Version="2.1.12" />
+    <PackageVersion Include="SQLitePCLRaw.provider.e_sqlite3" Version="2.1.12" />
   </ItemGroup>
 </Project>

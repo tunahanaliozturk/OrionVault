@@ -1,3 +1,5 @@
+<!-- markdownlint-disable MD024 -->
+
 # Changelog
 
 All notable changes to OrionVault are recorded here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
@@ -5,6 +7,28 @@ All notable changes to OrionVault are recorded here. Format follows [Keep a Chan
 ## [Unreleased]
 
 ## [0.4.0] - 2026-06-28
+
+### Security
+
+Two advisories reached the repository through transitive dependencies. **Neither is present in
+any shipped package** - both landed only in the sample, demo, and test projects - so no released
+version of OrionVault is affected and there is nothing for a consumer to do. They are pinned so
+the repository scans clean and a contributor's `dotnet restore` no longer warns.
+
+- **GHSA-447r-wph3-92pm** (High, denial of service in ASN.1 decoding). `System.Formats.Asn1`
+  5.0.0 reached `Moongazing.OrionVault.Analyzers.Tests` through
+  `Microsoft.CodeAnalysis.*.Analyzer.Testing` → `NuGet.Packaging` →
+  `System.Security.Cryptography.Pkcs`. Pinned to 8.0.2.
+- **GHSA-2m69-gcr7-jv3q** (High, in the bundled SQLite native library).
+  `SQLitePCLRaw.lib.e_sqlite3` 2.1.6 reached the sample, demo, and EF Core test projects through
+  `Microsoft.EntityFrameworkCore.Sqlite` → `Microsoft.Data.Sqlite`. Pinned to 2.1.12, with the
+  bundle, core, and provider packages pinned alongside the native lib so the four stay on one
+  version.
+
+Central transitive pinning (`CentralPackageTransitivePinningEnabled`) is now on, so a pin in
+`Directory.Packages.props` takes effect without a placeholder `PackageReference`. The demo
+project opts out of central package management on purpose - so it reads as a standalone app a
+reader can copy - and carries its pin inline.
 
 ### Added
 

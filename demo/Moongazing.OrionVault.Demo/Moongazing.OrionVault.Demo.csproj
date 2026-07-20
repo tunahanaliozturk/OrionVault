@@ -19,5 +19,14 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="8.0.10" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="8.0.1" />
+    <!--
+      Security pin: GHSA-2m69-gcr7-jv3q (High) in the bundled SQLite native library.
+      Microsoft.EntityFrameworkCore.Sqlite 8.0.10 resolves SQLitePCLRaw 2.1.6 transitively; this
+      lifts the whole bundle to the patched 2.1.12. Pinned here rather than in
+      Directory.Packages.props because this project opts out of central package management
+      (ManagePackageVersionsCentrally=false above) so the demo reads as a standalone app a
+      reader can copy. Drop this line once the EF Core reference resolves 2.1.12 on its own.
+    -->
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.12" />
   </ItemGroup>
 </Project>
