@@ -1,7 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFrameworks>net8.0;net9.0;net10.0</TargetFrameworks>
-    <IsPackable>true</IsPackable>
+    <!-- Held from the 0.4.0 publish: this is a new package id (OrionVault.GcpKms) not yet
+         published to NuGet. Flip to true to ship it on the next release. See CHANGELOG. -->
+    <IsPackable>false</IsPackable>
     <PackageId>OrionVault.GcpKms</PackageId>
     <Description>Google Cloud KMS key provider for OrionVault. Wraps OrionVault's symmetric data keys with a Cloud KMS crypto key via envelope encryption. The KMS key never leaves Google Cloud; the per-key data keys are decrypted at host startup (or refreshed on a TTL with the opt-in envelope-key cache) and held in process memory. Implements the standard IKeyProvider contract.</Description>
     <PackageTags>encryption;gcp;google-cloud;kms;envelope-encryption;orionvault</PackageTags>
