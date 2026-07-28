@@ -17,7 +17,7 @@ public sealed class ActiveKeyIdGaugeTests
         listener.InstrumentPublished = (instrument, l) =>
         {
             if (instrument.Meter.Name == OrionVaultDiagnostics.MeterName
-                && instrument.Name == "orionvault.active_key_id")
+                && instrument.Name == "orion.vault.active_key_id")
             {
                 l.EnableMeasurementEvents(instrument);
             }

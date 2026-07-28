@@ -62,21 +62,21 @@ public sealed class RotationDiagnosticsTests
         listener.InstrumentPublished = (instrument, l) =>
         {
             if (instrument.Meter.Name != OrionVaultDiagnostics.MeterName) return;
-            if (instrument.Name is "orionvault.rotation.rows_rotated"
-                or "orionvault.rotation.rows_skipped"
-                or "orionvault.rotation.cycle_duration_ms")
+            if (instrument.Name is "orion.vault.rotation.rows_rotated"
+                or "orion.vault.rotation.rows_skipped"
+                or "orion.vault.rotation.cycle_duration_ms")
             {
                 l.EnableMeasurementEvents(instrument);
             }
         };
         listener.SetMeasurementEventCallback<long>((instrument, val, _, _) =>
         {
-            if (instrument.Name == "orionvault.rotation.rows_rotated") lock (rotated) rotated.Add(val);
-            if (instrument.Name == "orionvault.rotation.rows_skipped") lock (skipped) skipped.Add(val);
+            if (instrument.Name == "orion.vault.rotation.rows_rotated") lock (rotated) rotated.Add(val);
+            if (instrument.Name == "orion.vault.rotation.rows_skipped") lock (skipped) skipped.Add(val);
         });
         listener.SetMeasurementEventCallback<double>((instrument, val, _, _) =>
         {
-            if (instrument.Name == "orionvault.rotation.cycle_duration_ms") lock (cycleDurations) cycleDurations.Add(val);
+            if (instrument.Name == "orion.vault.rotation.cycle_duration_ms") lock (cycleDurations) cycleDurations.Add(val);
         });
         listener.Start();
 

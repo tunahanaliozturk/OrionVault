@@ -37,7 +37,7 @@ public sealed class RotationLastCycleAtGaugeTests
         listener.InstrumentPublished = (instrument, l) =>
         {
             if (instrument.Meter.Name != OrionVaultDiagnostics.MeterName) return;
-            if (instrument.Name == "orionvault.rotation.last_cycle_at_unix_seconds")
+            if (instrument.Name == "orion.vault.rotation.last_cycle_at_unix_seconds")
             {
                 l.EnableMeasurementEvents(instrument);
             }

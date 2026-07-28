@@ -62,8 +62,8 @@ public sealed class RotationLastCycleGaugeTests
         listener.InstrumentPublished = (instrument, l) =>
         {
             if (instrument.Meter.Name != OrionVaultDiagnostics.MeterName) return;
-            if (instrument.Name == "orionvault.rotation.last_cycle.rotated"
-                || instrument.Name == "orionvault.rotation.last_cycle.scanned")
+            if (instrument.Name == "orion.vault.rotation.last_cycle.rotated"
+                || instrument.Name == "orion.vault.rotation.last_cycle.scanned")
             {
                 l.EnableMeasurementEvents(instrument);
             }
@@ -74,13 +74,13 @@ public sealed class RotationLastCycleGaugeTests
             // have its (disposed) Meter in process and its (zero-valued) gauges firing
             // alongside the host's. Using Math.Max keeps the larger value so the post-
             // sweep snapshot wins over any leftover zero-emitting gauges.
-            if (instrument.Name == "orionvault.rotation.last_cycle.rotated")
+            if (instrument.Name == "orion.vault.rotation.last_cycle.rotated")
             {
                 long current;
                 do { current = Interlocked.Read(ref rotated); }
                 while (val > current && Interlocked.CompareExchange(ref rotated, val, current) != current);
             }
-            if (instrument.Name == "orionvault.rotation.last_cycle.scanned")
+            if (instrument.Name == "orion.vault.rotation.last_cycle.scanned")
             {
                 long current;
                 do { current = Interlocked.Read(ref scanned); }

@@ -9,7 +9,7 @@ using Xunit;
 
 public sealed class DecryptionDurationHistogramTests
 {
-    private const string InstrumentName = "orionvault.decryption.duration_ms";
+    private const string InstrumentName = "orion.vault.decryption.duration_ms";
 
     private sealed class SingleKeyProvider : IKeyProvider
     {

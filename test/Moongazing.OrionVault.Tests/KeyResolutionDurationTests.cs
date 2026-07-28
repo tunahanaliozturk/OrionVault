@@ -18,7 +18,7 @@ public sealed class KeyResolutionDurationTests
         listener.InstrumentPublished = (instrument, l) =>
         {
             if (instrument.Meter.Name == OrionVaultDiagnostics.MeterName
-                && instrument.Name == "orionvault.key_resolution.duration_ms")
+                && instrument.Name == "orion.vault.key_resolution.duration_ms")
             {
                 l.EnableMeasurementEvents(instrument);
             }

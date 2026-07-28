@@ -21,7 +21,7 @@ public class OrionVaultDiagnosticsTests
         listener.InstrumentPublished = (inst, l) =>
         {
             if (inst.Meter.Name == OrionVaultDiagnostics.MeterName &&
-                inst.Name == "orionvault.encryptions")
+                inst.Name == "orion.vault.encryptions")
                 l.EnableMeasurementEvents(inst);
         };
         listener.SetMeasurementEventCallback<long>((_, val, _, _) => Interlocked.Add(ref encryptions, val));
@@ -51,7 +51,7 @@ public class OrionVaultDiagnosticsTests
         listener.InstrumentPublished = (inst, l) =>
         {
             if (inst.Meter.Name == OrionVaultDiagnostics.MeterName &&
-                inst.Name == "orionvault.decryption.failures")
+                inst.Name == "orion.vault.decryption.failures")
                 l.EnableMeasurementEvents(inst);
         };
         listener.SetMeasurementEventCallback<long>((_, _, tags, _) =>
