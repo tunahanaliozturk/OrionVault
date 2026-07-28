@@ -82,7 +82,7 @@ public sealed partial class ReEncryptionHostedService : BackgroundService
                 var target = scope.ServiceProvider.GetRequiredService<IReEncryptionTarget>();
                 var processed = await target.ReEncryptBatchAsync(cancellationToken).ConfigureAwait(false);
                 diagnostics.ReEncryptionRowsProcessed.Add(processed);
-                activity?.SetTag("orion.vault.reencryption.rows_processed", processed);
+                activity?.SetTag("orionvault.reencryption.rows_processed", processed);
                 LogBatchOk(logger, processed, sw.Elapsed.TotalMilliseconds);
             }
         }

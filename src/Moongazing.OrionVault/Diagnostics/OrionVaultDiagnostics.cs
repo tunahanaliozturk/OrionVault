@@ -117,7 +117,7 @@ public sealed class OrionVaultDiagnostics : OrionInstrumentation
         KeyNotFound = Meter.CreateCounter<long>("orion.vault.key_not_found", "{operations}",
             "Number of times the IKeyProvider returned null for a key id.");
         Duration = Meter.CreateHistogram<double>("orion.vault.encryption.duration_ms", "ms",
-            "Duration of encrypt operations (decrypt latency moved to orionvault.decryption.duration_ms in v0.2.28).");
+            "Duration of encrypt operations (decrypt latency moved to orion.vault.decryption.duration_ms in v0.2.28).");
         // v0.2.28 dedicated decrypt-latency histogram. The v0.2.x encryption.duration_ms above
         // only ever received encrypt samples; decrypt latency was unmeasured. This mirrors it on
         // the decrypt side so operators can graph p99 decrypt latency (key resolution + AES-GCM
@@ -129,8 +129,8 @@ public sealed class OrionVaultDiagnostics : OrionInstrumentation
         ReEncryptionBatchDuration = Meter.CreateHistogram<double>("orion.vault.reencryption.batch_duration_ms", "ms",
             "Duration of one re-encryption batch.");
         // v0.2.13: per-cycle counters for the EncryptionRotationHostedService<THandle>
-        // sweep. Operators graph rate(orionvault_rotation_rows_rotated_total[5m]) and
-        // p99(orionvault_rotation_cycle_duration_ms) to see how quickly the active key
+        // sweep. Operators graph rate(orion_vault_rotation_rows_rotated_total[5m]) and
+        // p99(orion_vault_rotation_cycle_duration_ms) to see how quickly the active key
         // rollout is converging across an estate without scraping log lines.
         RotationRowsRotated = Meter.CreateCounter<long>("orion.vault.rotation.rows_rotated", "{rows}",
             "Rows the EncryptionRotationHostedService re-encrypted under the active key.");
@@ -201,7 +201,7 @@ public sealed class OrionVaultDiagnostics : OrionInstrumentation
         _ = Meter.CreateObservableGauge<long>("orion.vault.rotation.last_cycle.errors", () => Interlocked.Read(ref lastCycleErrors),
             "{rows}", "Per-row errors in the last rotation cycle.");
         // v0.2.16 timestamp gauge in Unix seconds. Operators page on
-        // `(now() - orionvault_rotation_last_cycle_at_unix_seconds) > N` to detect a
+        // `(now() - orion_vault_rotation_last_cycle_at_unix_seconds) > N` to detect a
         // stalled rotation host long before the row counters reveal it. Reports 0 until
         // the FIRST cycle completes so 'never ran' is distinguishable from 'epoch'.
         _ = Meter.CreateObservableGauge<long>("orion.vault.rotation.last_cycle_at_unix_seconds", () => Interlocked.Read(ref lastCycleAtUnixSeconds),
