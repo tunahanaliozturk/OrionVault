@@ -23,9 +23,9 @@ OrionVault encrypts individual EF Core columns at rest. You mark a property with
 
 The threat model is narrow and explicit: an attacker who obtains a database backup, dumps the storage volume, or reads a replica's disk cannot read the protected columns without the active key set. Plaintext exists only inside authorized application processes that hold those keys.
 
-This is not full-database TDE. It is not key management. It is the EF Core integration layer that sits on top of `System.Security.Cryptography.AesGcm` and a pluggable `IKeyProvider`. The in-config key provider (`UseStaticKeys`) ships in the box; AWS KMS, Azure Key Vault, GCP KMS, and HashiCorp Vault providers ship as separate packages. A DPAPI provider remains on the roadmap.
+This is not full-database TDE. It is not key management. It is the EF Core integration layer that sits on top of `System.Security.Cryptography.AesGcm` and a pluggable `IKeyProvider`. The in-config key provider (`UseStaticKeys`) ships in the box. Key-provider integrations for AWS KMS, Azure Key Vault, GCP KMS, and HashiCorp Vault are implemented as separate `OrionVault.*` projects in the repository but are not yet published to NuGet; a DPAPI provider remains on the roadmap.
 
-The current release is 0.4.0. It adds searchable encryption: a deterministic HMAC-SHA256 blind index (`IBlindIndexProvider`) computed alongside the randomized ciphertext, so you can run equality search over an encrypted column without decrypting it. See [Searchable encrypted columns](#searchable-encrypted-columns) below.
+The current release is 0.4.0. Searchable encryption arrived in 0.3.0: a deterministic HMAC-SHA256 blind index (`IBlindIndexProvider`) computed alongside the randomized ciphertext, so you can run equality search over an encrypted column without decrypting it. See [Searchable encrypted columns](#searchable-encrypted-columns) below.
 
 ## How it works
 
@@ -85,12 +85,12 @@ flowchart LR
 | `OrionVault` | Core: `IEncryptor`, `IKeyProvider`, `IEncryptionConfigurator`, AES-256-GCM cipher, static key provider, searchable blind index (`IBlindIndexProvider`), telemetry. Bundles the Roslyn analyzer (`analyzers/dotnet/cs/`). |
 | `OrionVault.EntityFrameworkCore` | EF Core integration: `[Encrypted]` attribute, `IsEncrypted()` fluent API, value converter factory, `IModelCustomizer` wiring, `UseOrionVault()` extension. |
 | `OrionVault.Testing` | Test helpers: `AddOrionVaultForTesting()` DI extension, deterministic `TestKeyProvider`, `PlaintextEncryptor` for raw-layout tests, `EncryptionAssertions`. |
-| `OrionVault.AwsKms` | AWS KMS `IKeyProvider` — unwraps data keys from AWS Key Management Service. |
-| `OrionVault.AzureKeyVault` | Azure Key Vault `IKeyProvider` — unwraps data keys from Azure Key Vault. |
-| `OrionVault.GcpKms` | Google Cloud KMS `IKeyProvider` — unwraps data keys from GCP Key Management. |
-| `OrionVault.HashiCorpVault` | HashiCorp Vault `IKeyProvider` — unwraps data keys from HashiCorp Vault's Transit engine. |
+| `OrionVault.AwsKms` _(in repo, not yet on NuGet)_ | AWS KMS `IKeyProvider` — unwraps data keys from AWS Key Management Service. |
+| `OrionVault.AzureKeyVault` _(in repo, not yet on NuGet)_ | Azure Key Vault `IKeyProvider` — unwraps data keys from Azure Key Vault. |
+| `OrionVault.GcpKms` _(in repo, not yet on NuGet)_ | Google Cloud KMS `IKeyProvider` — unwraps data keys from GCP Key Management. |
+| `OrionVault.HashiCorpVault` _(in repo, not yet on NuGet)_ | HashiCorp Vault `IKeyProvider` — unwraps data keys from HashiCorp Vault's Transit engine. |
 
-All packages multi-target `net8.0` / `net9.0` / `net10.0`. The analyzer ships inside the core package; there is no separate analyzers nupkg to install.
+The three published packages multi-target `net8.0` / `net9.0` / `net10.0`. The analyzer ships inside the core package; there is no separate analyzers nupkg to install. The cloud-KMS / HashiCorp provider projects listed above are implemented in the repository but are not yet published to NuGet.
 
 ## 30-second quick start
 
@@ -194,7 +194,7 @@ After this configuration:
 - Existing rows that were written under key 1 are still decrypted correctly because key 1 is still registered.
 - A row encrypted under a key that is not registered throws `OrionVaultKeyNotFoundException` on read.
 
-To actually retire key 1, re-encrypt existing rows by running them through `SaveChanges` once (load entity, mark a tracked property modified, save). The value converter encrypts under the current `ActiveKeyId`. For bulk migration, the built-in `ReEncryptionHostedService` walks the table and re-writes rows under the active key in the background.
+To actually retire key 1, re-encrypt existing rows by running them through `SaveChanges` once (load entity, mark a tracked property modified, save). The value converter encrypts under the current `ActiveKeyId`. For bulk migration, register the background `ReEncryptionHostedService` (`UseReEncryptionService()`) together with an `IReEncryptionTarget` that enumerates and rewrites the rows for your model; the hosted service drives that target on a schedule rather than walking the table itself (the default target is a no-op).
 
 ## Searchable encrypted columns
 
@@ -357,7 +357,7 @@ Veil does not protect against a database leak. OrionVault does not protect again
 | Test helpers package                   | Yes        | No                                 | -                       | -                         |
 | Target frameworks                      | net8/9/10  | net6+                              | -                       | net6+                     |
 | Designed for EF Core specifically      | Yes        | Yes                                | Yes                     | No                        |
-| Built-in cloud KMS                     | Yes        | No                                 | -                       | Via extensions            |
+| Cloud KMS providers                    | In repo    | No                                 | -                       | Via extensions            |
 
 OrionVault is not the only column-encryption story in the .NET ecosystem; it is the one that ships an analyzer, telemetry, and a Testing package out of the box, with a deliberately small API surface. If you already have a working `EntityFrameworkCore.DataEncryption` setup and are happy with it, there is no urgent reason to migrate.
 
@@ -377,7 +377,7 @@ Each ships separately on NuGet.
 
 See [ROADMAP.md](ROADMAP.md) for the full 12-month plan. Highlights:
 
-- v0.2 (shipped) - AWS KMS, Azure Key Vault, and GCP KMS providers; HashiCorp Vault provider; background re-encryption hosted service (`ReEncryptionHostedService`); multi-DbContext support.
+- v0.2 - background re-encryption hosted service (`ReEncryptionHostedService`) and multi-DbContext support shipped in the core package. AWS KMS, Azure Key Vault, GCP KMS, and HashiCorp Vault provider projects are implemented but not yet published to NuGet.
 - v0.3 (shipped) - First-class searchable blind index (`IBlindIndexProvider`) with versioned key rotation.
 - v0.3.x (2027-Q1) - Numeric / DateTime / decimal column types; migration helper for converting existing plaintext columns.
 - v0.4 (2027-Q1/Q2) - Windows DPAPI provider, HashiCorp Vault provider, per-tenant key partitioning.
