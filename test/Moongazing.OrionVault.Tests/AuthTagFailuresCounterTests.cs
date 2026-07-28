@@ -9,7 +9,7 @@ using Xunit;
 
 public sealed class AuthTagFailuresCounterTests
 {
-    private const string InstrumentName = "orionvault.decryption.auth_tag_failures";
+    private const string InstrumentName = "orion.vault.decryption.auth_tag_failures";
 
     // A single registered 32-byte key so encrypt/decrypt round-trips.
     private sealed class SingleKeyProvider : IKeyProvider

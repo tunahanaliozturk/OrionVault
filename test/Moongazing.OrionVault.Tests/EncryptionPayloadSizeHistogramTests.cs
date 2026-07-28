@@ -20,7 +20,7 @@ public sealed class EncryptionPayloadSizeHistogramTests
         listener.InstrumentPublished = (instrument, l) =>
         {
             if (instrument.Meter.Name != OrionVaultDiagnostics.MeterName) return;
-            if (instrument.Name == "orionvault.encryption.payload_size_bytes")
+            if (instrument.Name == "orion.vault.encryption.payload_size_bytes")
             {
                 l.EnableMeasurementEvents(instrument);
             }

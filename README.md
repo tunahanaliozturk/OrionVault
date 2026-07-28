@@ -25,7 +25,7 @@ The threat model is narrow and explicit: an attacker who obtains a database back
 
 This is not full-database TDE. It is not key management. It is the EF Core integration layer that sits on top of `System.Security.Cryptography.AesGcm` and a pluggable `IKeyProvider`. The in-config key provider (`UseStaticKeys`) ships in the box. Key-provider integrations for AWS KMS, Azure Key Vault, GCP KMS, and HashiCorp Vault are implemented as separate `OrionVault.*` projects in the repository but are not yet published to NuGet; a DPAPI provider remains on the roadmap.
 
-The current release is 0.4.0. Searchable encryption arrived in 0.3.0: a deterministic HMAC-SHA256 blind index (`IBlindIndexProvider`) computed alongside the randomized ciphertext, so you can run equality search over an encrypted column without decrypting it. See [Searchable encrypted columns](#searchable-encrypted-columns) below.
+The current release is 0.5.0. Searchable encryption arrived in 0.3.0: a deterministic HMAC-SHA256 blind index (`IBlindIndexProvider`) computed alongside the randomized ciphertext, so you can run equality search over an encrypted column without decrypting it. See [Searchable encrypted columns](#searchable-encrypted-columns) below.
 
 ## How it works
 
@@ -286,8 +286,8 @@ Suppress per-call site with `#pragma warning disable OV0002` when you know what 
 
 OrionVault publishes one `ActivitySource` and one `Meter`, both named `Moongazing.OrionVault`:
 
-- Counters: `orionvault.encryptions`, `orionvault.decryptions`, `orionvault.decryption.failures`, `orionvault.key_lookups`, `orionvault.key_not_found`.
-- Histogram: `orionvault.encryption.duration_ms`.
+- Counters: `orion.vault.encryptions`, `orion.vault.decryptions`, `orion.vault.decryption.failures`, `orion.vault.key_lookups`, `orion.vault.key_not_found`.
+- Histogram: `orion.vault.encryption.duration_ms`.
 
 Subscribe with the standard OpenTelemetry .NET helpers:
 

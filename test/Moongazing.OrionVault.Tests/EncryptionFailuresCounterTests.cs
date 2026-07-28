@@ -19,7 +19,7 @@ public sealed class EncryptionFailuresCounterTests
         listener.InstrumentPublished = (instrument, l) =>
         {
             if (instrument.Meter.Name == OrionVaultDiagnostics.MeterName
-                && instrument.Name == "orionvault.encryption.failures")
+                && instrument.Name == "orion.vault.encryption.failures")
             {
                 l.EnableMeasurementEvents(instrument);
             }
@@ -55,7 +55,7 @@ public sealed class EncryptionFailuresCounterTests
         listener.InstrumentPublished = (instrument, l) =>
         {
             if (instrument.Meter.Name == OrionVaultDiagnostics.MeterName
-                && instrument.Name == "orionvault.encryption.failures")
+                && instrument.Name == "orion.vault.encryption.failures")
             {
                 l.EnableMeasurementEvents(instrument);
             }

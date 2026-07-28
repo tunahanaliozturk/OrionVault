@@ -8,7 +8,7 @@ using Xunit;
 
 public sealed class LegacyKeyUsedCounterTests
 {
-    private const string InstrumentName = "orionvault.decryption.legacy_key_used";
+    private const string InstrumentName = "orion.vault.decryption.legacy_key_used";
 
     // A provider with an explicit active key id and a fixed key table.
     private sealed class FixedKeyProvider : IKeyProvider

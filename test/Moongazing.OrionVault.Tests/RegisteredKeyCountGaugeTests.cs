@@ -18,7 +18,7 @@ public sealed class RegisteredKeyCountGaugeTests
         listener.InstrumentPublished = (instrument, l) =>
         {
             if (instrument.Meter.Name == OrionVaultDiagnostics.MeterName
-                && instrument.Name == "orionvault.keys.registered_count")
+                && instrument.Name == "orion.vault.keys.registered_count")
             {
                 l.EnableMeasurementEvents(instrument);
             }

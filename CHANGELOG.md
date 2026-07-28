@@ -6,6 +6,34 @@ All notable changes to OrionVault are recorded here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-07-28
+
+### Changed
+
+- **Converged the OpenTelemetry instrumentation onto the frozen `Orion.Abstractions` 1.0 spine.**
+  `OrionVaultDiagnostics` now derives from `OrionInstrumentation` and uses the spine's `Meter` and
+  `ActivitySource`, so OrionVault shares the family's naming conventions. References
+  `Orion.Abstractions` 1.0.0, which raises the floor for `Microsoft.Extensions.DependencyInjection.Abstractions`
+  and `Microsoft.Extensions.Options` to 9.0.0 (the whole `Microsoft.Extensions.*` set moved to 9.0.0
+  to stay in band).
+
+  **Breaking (telemetry only): every metric name changed** from the `orionvault.*` prefix to the
+  family `orion.vault.*` convention. The meter / activity-source name is unchanged
+  (`Moongazing.OrionVault` — subscribers keep working), and all tags, tag values, span names, and the
+  public API (`SetActiveKeyIdSnapshot`, `SetRegisteredKeyCountSnapshot`, `MeterName`,
+  `ActivitySourceName`) are unchanged. Rename every dashboard/alert metric, e.g.:
+
+  | Before | After |
+  | --- | --- |
+  | `orionvault.encryptions` | `orion.vault.encryptions` |
+  | `orionvault.decryptions` | `orion.vault.decryptions` |
+  | `orionvault.decryption.failures` | `orion.vault.decryption.failures` |
+  | `orionvault.encryption.duration_ms` | `orion.vault.encryption.duration_ms` |
+  | `orionvault.rotation.*`, `orionvault.key*`, `orionvault.active_key_id`, … | `orion.vault.*` |
+
+  Every `orionvault.<name>` instrument gained the `orion.vault.` prefix; the suffix after the prefix
+  is unchanged.
+
 ## [0.4.0] - 2026-07-20
 
 > **Publish note.** This release ships the three already-published packages — `OrionVault`,
@@ -946,7 +974,9 @@ Replace `<PackageReference Include="Moongazing.OrionVault" Version="0.1.1" />` w
 - Only `string` and `byte[]` CLR types are supported. Numeric/DateTime/decimal/JSON types are on the v0.3 roadmap.
 - No cloud KMS providers yet (AWS, Azure, GCP, HashiCorp, DPAPI). All planned for v0.2 / v0.4 roadmap.
 
-[Unreleased]: https://github.com/tunahanaliozturk/OrionVault/compare/v0.3.4...HEAD
+[Unreleased]: https://github.com/tunahanaliozturk/OrionVault/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/tunahanaliozturk/OrionVault/compare/v0.4.0...v0.5.0
+[0.4.0]: https://github.com/tunahanaliozturk/OrionVault/compare/v0.3.4...v0.4.0
 [0.3.4]: https://github.com/tunahanaliozturk/OrionVault/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/tunahanaliozturk/OrionVault/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/tunahanaliozturk/OrionVault/compare/v0.3.1...v0.3.2

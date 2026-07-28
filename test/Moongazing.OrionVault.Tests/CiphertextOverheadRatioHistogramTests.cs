@@ -8,7 +8,7 @@ using Xunit;
 
 public sealed class CiphertextOverheadRatioHistogramTests
 {
-    private const string InstrumentName = "orionvault.encryption.ciphertext_overhead_ratio";
+    private const string InstrumentName = "orion.vault.encryption.ciphertext_overhead_ratio";
 
     private sealed class FixedKeyProvider : IKeyProvider
     {
