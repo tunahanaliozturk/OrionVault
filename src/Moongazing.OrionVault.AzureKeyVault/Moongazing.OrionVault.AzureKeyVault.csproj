@@ -5,7 +5,7 @@
          published to NuGet. Flip to true to ship it on the next release. See CHANGELOG. -->
     <IsPackable>false</IsPackable>
     <PackageId>OrionVault.AzureKeyVault</PackageId>
-    <Description>Azure Key Vault key provider for OrionVault. Wraps OrionVault's symmetric data keys with an Azure Key Vault KEK (RSA or AES-KW), keeping the master key inside the vault. Data keys are unwrapped once at host startup and cached in process memory for the provider lifetime.</Description>
+    <Description>Azure Key Vault key provider for OrionVault. Wraps OrionVault's symmetric data keys with an Azure Key Vault KEK (RSA or AES-KW), keeping the master key inside the vault. Data keys are unwrapped at host startup (or refreshed on a TTL with the opt-in envelope-key cache) and held in process memory.</Description>
     <PackageTags>encryption;azure;key-vault;envelope-encryption;orionvault</PackageTags>
     <PackageReadmeFile>docs/README.md</PackageReadmeFile>
   </PropertyGroup>
@@ -21,5 +21,9 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Moongazing.OrionVault\Moongazing.OrionVault.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Moongazing.OrionVault.AzureKeyVault.Tests" />
   </ItemGroup>
 </Project>

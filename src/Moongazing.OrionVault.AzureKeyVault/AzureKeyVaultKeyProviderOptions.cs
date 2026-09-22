@@ -1,4 +1,5 @@
 using Azure.Security.KeyVault.Keys.Cryptography;
+using Moongazing.OrionVault.Caching;
 
 namespace Moongazing.OrionVault.AzureKeyVault;
 
@@ -40,4 +41,12 @@ public sealed class AzureKeyVaultKeyProviderOptions
     /// decrypt during a rotation rollout.
     /// </summary>
     public IDictionary<short, string> WrappedKeys { get; } = new Dictionary<short, string>();
+
+    /// <summary>
+    /// Opt-in envelope-key caching. Off by default: the provider unwraps once at startup and
+    /// holds the plaintext for the provider lifetime. Enable with a TTL to re-fetch the wrapped
+    /// keys periodically so a KEK disabled / deleted, or a vault access policy / RBAC assignment
+    /// removed mid-run, is picked up without a host restart.
+    /// </summary>
+    public EnvelopeKeyCacheOptions Cache { get; } = new();
 }

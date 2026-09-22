@@ -1,6 +1,5 @@
 namespace Moongazing.OrionVault.AwsKms.IntegrationTests;
 
-using Amazon;
 using Amazon.KeyManagementService;
 using Amazon.KeyManagementService.Model;
 using Amazon.Runtime;
@@ -10,11 +9,11 @@ using Xunit;
 
 /// <summary>
 /// End-to-end integration tests for <see cref="AwsKmsKeyProvider"/> against a
-/// LocalStack-hosted KMS emulator. Spins up the container per fixture, generates a CMK,
-/// wraps two 32-byte plaintext keys, and exercises the production
-/// <see cref="AwsKmsKeyProvider.CreateAsync"/> path so unwrap behaviour, parallel decrypt,
-/// and validation errors are covered against a real AWS API surface (not the unit-test
-/// mocks).
+/// LocalStack-hosted KMS emulator. Spins up the container per fixture, generates two CMKs,
+/// wraps 32-byte plaintext keys under them, and exercises the production
+/// <see cref="AwsKmsKeyProvider.CreateAsync"/> path so unwrap behaviour, CMK pinning,
+/// parallel decrypt, and validation errors are covered against a real AWS API surface (not
+/// the unit-test mocks).
 /// </summary>
 [Trait("Category", "Integration")]
 public sealed class AwsKmsKeyProviderLocalStackTests : IAsyncLifetime
@@ -25,6 +24,10 @@ public sealed class AwsKmsKeyProviderLocalStackTests : IAsyncLifetime
 
     private AmazonKeyManagementServiceClient kms = default!;
     private string cmkId = default!;
+
+    // A second, independent CMK standing in for "a key the attacker controls but the host
+    // principal can nonetheless call kms:Decrypt on" - the cross-account / Resource:"*" shape.
+    private string foreignCmkId = default!;
 
     public async Task InitializeAsync()
     {
@@ -39,12 +42,8 @@ public sealed class AwsKmsKeyProviderLocalStackTests : IAsyncLifetime
             new BasicAWSCredentials("test", "test"),
             config);
 
-        var cmk = await kms.CreateKeyAsync(new CreateKeyRequest
-        {
-            Description = "OrionVault integration test CMK",
-            KeyUsage = KeyUsageType.ENCRYPT_DECRYPT,
-        });
-        cmkId = cmk.KeyMetadata.KeyId;
+        cmkId = await CreateCmkAsync("OrionVault integration test CMK");
+        foreignCmkId = await CreateCmkAsync("OrionVault integration test foreign CMK");
     }
 
     public async Task DisposeAsync()
@@ -53,12 +52,24 @@ public sealed class AwsKmsKeyProviderLocalStackTests : IAsyncLifetime
         await container.DisposeAsync();
     }
 
-    private async Task<string> WrapAsync(byte[] plaintext)
+    private async Task<string> CreateCmkAsync(string description)
+    {
+        var cmk = await kms.CreateKeyAsync(new CreateKeyRequest
+        {
+            Description = description,
+            KeyUsage = KeyUsageType.ENCRYPT_DECRYPT,
+        });
+        return cmk.KeyMetadata.KeyId;
+    }
+
+    private Task<string> WrapAsync(byte[] plaintext) => WrapUnderAsync(cmkId, plaintext);
+
+    private async Task<string> WrapUnderAsync(string keyId, byte[] plaintext)
     {
         using var ms = new MemoryStream(plaintext);
         var encrypted = await kms.EncryptAsync(new EncryptRequest
         {
-            KeyId = cmkId,
+            KeyId = keyId,
             Plaintext = ms,
         });
         return Convert.ToBase64String(encrypted.CiphertextBlob.ToArray());
@@ -77,7 +88,7 @@ public sealed class AwsKmsKeyProviderLocalStackTests : IAsyncLifetime
         var keyOne = Key32(0x11);
         var keyTwo = Key32(0x22);
 
-        var options = new AwsKmsKeyProviderOptions { ActiveKeyId = 2 };
+        var options = new AwsKmsKeyProviderOptions { KeyId = cmkId, ActiveKeyId = 2 };
         options.WrappedKeys[1] = await WrapAsync(keyOne);
         options.WrappedKeys[2] = await WrapAsync(keyTwo);
 
@@ -97,7 +108,7 @@ public sealed class AwsKmsKeyProviderLocalStackTests : IAsyncLifetime
         // is fast enough that a sequential and parallel run differ by milliseconds), but the
         // success path with N entries verifies the WhenAll fan-out at least completes
         // without serialisation deadlocks.
-        var options = new AwsKmsKeyProviderOptions { ActiveKeyId = 0 };
+        var options = new AwsKmsKeyProviderOptions { KeyId = cmkId, ActiveKeyId = 0 };
         for (short i = 0; i < 8; i++)
         {
             options.WrappedKeys[i] = await WrapAsync(Key32((byte)(0x10 + i)));
@@ -119,10 +130,61 @@ public sealed class AwsKmsKeyProviderLocalStackTests : IAsyncLifetime
         // bytes; the provider's post-unwrap validation must reject it as != 32 bytes.
         var sixteen = new byte[16];
         Array.Fill(sixteen, (byte)0x33);
-        var options = new AwsKmsKeyProviderOptions { ActiveKeyId = 1 };
+        var options = new AwsKmsKeyProviderOptions { KeyId = cmkId, ActiveKeyId = 1 };
         options.WrappedKeys[1] = await WrapAsync(sixteen);
 
         await Assert.ThrowsAsync<Moongazing.OrionVault.Exceptions.OrionVaultConfigurationException>(
             () => AwsKmsKeyProvider.CreateAsync(kms, options));
+    }
+
+    [Fact]
+    public async Task CreateAsync_refuses_a_blob_wrapped_under_a_CMK_other_than_the_configured_one()
+    {
+        // The substitution this pins down: someone who can influence WrappedKeys (config store,
+        // environment variable, appsettings.json in the image, compromised deploy pipeline)
+        // supplies a 32-byte data key they wrapped under a CMK *they* control, which the host
+        // principal happens to hold kms:Decrypt on. With no KeyId on the DecryptRequest, KMS
+        // resolves the key from the blob's own metadata and decrypts it happily - the attacker's
+        // key silently becomes OrionVault's active data key, and the 32-byte length check (the
+        // provider's only other validation) passes. Pinning the CMK is what stops it.
+        var attackerKey = Key32(0x44);
+        var options = new AwsKmsKeyProviderOptions { KeyId = cmkId, ActiveKeyId = 1 };
+        options.WrappedKeys[1] = await WrapUnderAsync(foreignCmkId, attackerKey);
+
+        var ex = await Assert.ThrowsAnyAsync<AmazonKeyManagementServiceException>(
+            () => AwsKmsKeyProvider.CreateAsync(kms, options));
+
+        // Whatever KMS calls it, the point is that no provider came back holding the substituted
+        // key. Guard against a future refactor turning the throw into a silent fallback.
+        Assert.NotNull(ex);
+    }
+
+    [Fact]
+    public async Task CreateAsync_accepts_the_same_blob_when_configured_for_the_CMK_it_was_wrapped_under()
+    {
+        // Positive control for the test above: the blob itself is perfectly valid. It is the
+        // mismatch against the configured CMK - not a malformed ciphertext - that gets it refused.
+        var key = Key32(0x44);
+        var blob = await WrapUnderAsync(foreignCmkId, key);
+
+        var options = new AwsKmsKeyProviderOptions { KeyId = foreignCmkId, ActiveKeyId = 1 };
+        options.WrappedKeys[1] = blob;
+
+        var provider = await AwsKmsKeyProvider.CreateAsync(kms, options);
+
+        Assert.True(key.AsSpan().SequenceEqual(provider.TryGetKey(1)!.Value.Span));
+    }
+
+    [Fact]
+    public async Task CreateAsync_fails_fast_when_no_CMK_is_configured()
+    {
+        // A deployment that forgot to pin its CMK must not fall back to "let KMS pick"; it must
+        // stop at startup with the option name in the message.
+        var options = new AwsKmsKeyProviderOptions { ActiveKeyId = 1 };
+        options.WrappedKeys[1] = await WrapAsync(Key32(0x11));
+
+        var ex = await Assert.ThrowsAsync<Moongazing.OrionVault.Exceptions.OrionVaultConfigurationException>(
+            () => AwsKmsKeyProvider.CreateAsync(kms, options));
+        Assert.Contains("KeyId", ex.Message, StringComparison.Ordinal);
     }
 }

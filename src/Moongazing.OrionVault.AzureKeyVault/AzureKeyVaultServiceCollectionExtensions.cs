@@ -4,6 +4,7 @@ using Azure.Security.KeyVault.Keys.Cryptography;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Moongazing.OrionVault.Abstractions;
+using Moongazing.OrionVault.Caching;
 
 namespace Moongazing.OrionVault.AzureKeyVault;
 
@@ -19,10 +20,17 @@ public static class AzureKeyVaultServiceCollectionExtensions
     /// so the credentials story stays in the consumer's hands.
     /// </summary>
     /// <remarks>
-    /// CAUTION: the factory blocks during host startup while it round-trips the configured
-    /// ciphertext blobs through Azure Key Vault. Typical latency is one round-trip per key id.
-    /// The unwrapped plaintext data keys live in process memory for the provider lifetime;
-    /// OrionVault does NOT cache plaintext anywhere else.
+    /// CAUTION: on the default (unwrap-once) path the factory blocks during host startup while it
+    /// round-trips the configured ciphertext blobs through Azure Key Vault. Typical latency is one
+    /// round-trip per key id. The unwrapped plaintext data keys live in process memory for the
+    /// provider lifetime; OrionVault does NOT cache plaintext anywhere else.
+    /// <para>
+    /// When <see cref="EnvelopeKeyCacheOptions.Enabled"/> is set on
+    /// <see cref="AzureKeyVaultKeyProviderOptions.Cache"/>, the provider is wrapped in a
+    /// <see cref="CachingKeyProvider"/> that re-fetches the wrapped keys after the configured TTL,
+    /// so a KEK disabled / deleted or an access policy removed mid-run is honoured without a host
+    /// restart.
+    /// </para>
     /// </remarks>
     public static IServiceCollection AddOrionVaultAzureKeyVault(
         this IServiceCollection services,
@@ -38,6 +46,18 @@ public static class AzureKeyVaultServiceCollectionExtensions
             var opts = sp.GetRequiredService<IOptions<AzureKeyVaultKeyProviderOptions>>().Value;
             var cryptoClient = ResolveCryptographyClient(sp, opts);
             var unwrapClient = new CryptographyClientUnwrapAdapter(cryptoClient, opts.WrapAlgorithm);
+
+            if (opts.Cache.Enabled)
+            {
+                opts.Cache.Validate();
+                var source = AzureKeyVaultKeyProvider.CreateUnwrappedKeySource(unwrapClient, opts);
+                var caching = new CachingKeyProvider(source, opts.Cache, sp.GetService<TimeProvider>());
+                // Prime up front so misconfiguration / the first vault round-trip surfaces at
+                // startup, matching the unwrap-once path's fail-fast behaviour.
+                caching.Prime();
+                return caching;
+            }
+
             return AzureKeyVaultKeyProvider.CreateAsync(unwrapClient, opts).GetAwaiter().GetResult();
         });
 

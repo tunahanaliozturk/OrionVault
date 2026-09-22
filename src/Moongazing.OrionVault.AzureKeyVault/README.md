@@ -41,3 +41,22 @@ services.AddOrionVault(/* ... */);
 | `WrapAlgorithm` | `RsaOaep256` | Azure `KeyWrapAlgorithm` to use during unwrap. Use `A256KW` for HSM-backed AES keys. |
 | `ActiveKeyId` | required | Active data-key id used for new encryptions. |
 | `WrappedKeys` | required | Map of `short` -> base64 wrapped data key. |
+| `Cache` | off | Opt-in envelope-key cache; see below. |
+
+## Envelope-key caching (opt-in)
+
+By default the provider unwraps once at startup and holds the plaintext keys for the provider lifetime — which means a KEK disabled, or an access policy / RBAC assignment removed mid-run, keeps working until the host restarts. Enable the envelope-key cache to re-fetch the wrapped keys on a TTL so a revoked key is honoured without a restart:
+
+```csharp
+services.AddOrionVaultAzureKeyVault(o =>
+{
+    o.KeyName = "orionvault-kek";
+    o.ActiveKeyId = 1;
+    o.WrappedKeys[1] = "BASE64-AZURE-WRAPPED-DATA-KEY-1";
+
+    o.Cache.Enabled = true;
+    o.Cache.Ttl = TimeSpan.FromMinutes(10);
+});
+```
+
+A refresh that hits a revocation-class denial — HTTP 403 (access policy / RBAC withdrawn), 404 (key deleted) or 409 (key disabled or soft-deleted) — fails closed even with `Cache.ServeStaleOnRefreshFailure` left on. 429 throttling and 5xx are treated as transient and keep serving the last-good snapshot.
