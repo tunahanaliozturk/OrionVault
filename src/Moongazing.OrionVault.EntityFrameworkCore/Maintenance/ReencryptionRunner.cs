@@ -79,17 +79,26 @@ public sealed partial class ReencryptionRunner : IEncryptionMaintenance
         var sw = System.Diagnostics.Stopwatch.StartNew();
 
         var total = ReencryptionReport.Empty;
-        var offset = 0;
+        object? cursor = null;
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
             // Tracking query so mutated rows are flagged Modified and SaveChanges writes them.
-            // Ordered Skip/Take paging: the sort key (typically the PK) is never an encrypted
-            // column, so it does not change when a row is re-encrypted - the window stays stable
-            // across the writes this pass makes.
-            var batch = await plan.OrderBy(context.Set<TEntity>())
-                .Skip(offset)
+            // KEYSET paging: each batch asks for the rows whose key sorts strictly after the last
+            // row of the previous batch. Skip(offset)/Take is NOT safe over a live table - the sort
+            // key being immutable keeps the ORDER stable but says nothing about the OFFSET, and any
+            // concurrent delete of a row below the current offset shifts the whole window down by
+            // one, so the pass steps clean over an unvisited row. That row keeps the revoked key
+            // forever while the final report shows zero errors. A key cursor says where to resume
+            // rather than how many rows to discard, so deletes below it cannot move it.
+            IQueryable<TEntity> page = context.Set<TEntity>();
+            if (cursor is not null)
+            {
+                page = plan.After(page, cursor);
+            }
+
+            var batch = await plan.OrderBy(page)
                 .Take(plan.BatchSize)
                 .ToListAsync(cancellationToken)
                 .ConfigureAwait(false);
@@ -99,7 +108,11 @@ public sealed partial class ReencryptionRunner : IEncryptionMaintenance
                 break;
             }
 
-            var batchReport = ProcessBatch(plan, batch, activeKeyId, activeIndexVersion);
+            // The batch is ordered by the key, so its last row carries the highest key seen; take
+            // the cursor before processing so it is independent of anything the batch does.
+            cursor = plan.ReadKey(batch[^1]);
+
+            var batchReport = ProcessBatch(context, plan, batch, activeKeyId, activeIndexVersion);
             // Persist this batch before moving on so an interruption leaves a prefix of the table
             // already migrated (resumable). SaveChanges only writes the rows actually mutated.
             await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
@@ -107,17 +120,12 @@ public sealed partial class ReencryptionRunner : IEncryptionMaintenance
             total = total.Add(batchReport);
             EmitBatchTelemetry(batchReport);
 
-            // Advance by the number of rows FETCHED, not modified: skipped rows must still be
-            // stepped over or the next page would re-fetch them. Because the order is by an
-            // immutable key, this never double-processes or misses a row.
-            offset += batch.Count;
-
             // Detach this batch's entities now that they are saved. BatchSize bounds the QUERY, not
             // the change tracker: without this clear a long run accumulates every processed entity,
             // growing memory unbounded and forcing each later SaveChanges/DetectChanges to re-scan
             // all previously processed rows (O(n^2) over the table). The paging cursor is the local
-            // 'offset' above, which is independent of tracker state, so clearing here does not skip
-            // or re-fetch rows - the next Skip(offset)/Take resumes exactly where this batch ended.
+            // 'cursor' above, which is independent of tracker state, so clearing here does not skip
+            // or re-fetch rows - the next batch resumes from exactly the key this one ended on.
             context.ChangeTracker.Clear();
 
             if (batch.Count < plan.BatchSize)
@@ -134,6 +142,7 @@ public sealed partial class ReencryptionRunner : IEncryptionMaintenance
     }
 
     private ReencryptionReport ProcessBatch<TEntity>(
+        DbContext context,
         ReencryptionPlan<TEntity> plan,
         List<TEntity> batch,
         short activeKeyId,
@@ -172,6 +181,20 @@ public sealed partial class ReencryptionRunner : IEncryptionMaintenance
 #pragma warning restore CA1031
             {
                 errors++;
+                // ProcessRow writes each column back as it goes, so a failure on the SECOND
+                // encrypted column leaves the FIRST column's freshly rotated ciphertext sitting on
+                // the tracked entity - and this batch's SaveChanges would persist it while the
+                // report says errors=1, reEncrypted=0. Detaching drops the whole entity from the
+                // change tracker, so an errored row is a row the pass did not touch: the report and
+                // the table agree, and a re-run sees the same state instead of a half-migrated one
+                // that fails on the same column forever.
+                //
+                // Detaching rather than reverting the mutated columns: reverting would leave the
+                // entity attached and rely on EF's byte[] change detection deciding the restored
+                // value is "unchanged", and a per-column try/catch would keep the row attached too
+                // AND break the documented report invariant that a row is re-encrypted, skipped, or
+                // errored - never partly each.
+                context.Entry(entity).State = EntityState.Detached;
                 LogRowFailed(ex);
             }
         }

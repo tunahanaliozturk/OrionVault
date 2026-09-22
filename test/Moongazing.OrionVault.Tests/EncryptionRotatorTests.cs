@@ -5,6 +5,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Moongazing.OrionVault;
 using Moongazing.OrionVault.Abstractions;
 using Moongazing.OrionVault.DependencyInjection;
+using Moongazing.OrionVault.Exceptions;
 using Moongazing.OrionVault.Rotation;
 using Xunit;
 
@@ -53,10 +54,31 @@ public sealed class EncryptionRotatorTests
     }
 
     [Fact]
-    public void NeedsRotation_returns_false_for_under_header_length_input()
+    public void NeedsRotation_rejects_a_value_too_short_to_be_an_envelope()
     {
-        Assert.False(EncryptionRotator.NeedsRotation(new byte[] { 0x01 }, activeKeyId: 1));
-        Assert.False(EncryptionRotator.NeedsRotation(Array.Empty<byte>(), activeKeyId: 1));
+        // A blob below the 30-byte envelope minimum is not ciphertext: a never-encrypted value
+        // left behind by a plaintext migration, or a truncated one. Returning false for it would
+        // declare it "already on the active key" - and a sweep would then report a clean pass over
+        // a column holding no ciphertext at all, as long as its first two bytes matched the active
+        // key id. That is precisely what the second case below pins: 0x00 0x01 IS active key id 1.
+        Assert.Throws<OrionVaultDecryptionException>(() =>
+            EncryptionRotator.NeedsRotation(new byte[] { 0x01 }, activeKeyId: 1));
+        Assert.Throws<OrionVaultDecryptionException>(() =>
+            EncryptionRotator.NeedsRotation([], activeKeyId: 1));
+        Assert.Throws<OrionVaultDecryptionException>(() =>
+            EncryptionRotator.NeedsRotation([0x00, 0x01, .. "plaintext left behind"u8], activeKeyId: 1));
+    }
+
+    [Fact]
+    public void NeedsRotation_accepts_a_blob_of_exactly_the_envelope_minimum()
+    {
+        // The gate is "below the minimum", not "below a round number": a 30-byte envelope (header
+        // + tag, empty body) is legal and its key id must still be read.
+        var minimal = new byte[30];
+        minimal[1] = 3;
+
+        Assert.True(EncryptionRotator.NeedsRotation(minimal, activeKeyId: 1));
+        Assert.False(EncryptionRotator.NeedsRotation(minimal, activeKeyId: 3));
     }
 
     [Fact]

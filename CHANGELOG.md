@@ -1,4 +1,4 @@
-<!-- markdownlint-disable MD024 -->
+﻿<!-- markdownlint-disable MD024 -->
 
 # Changelog
 
@@ -48,6 +48,18 @@ All notable changes to OrionVault are recorded here. Format follows [Keep a Chan
   suite is unaffected because it genuinely runs on LocalStack via Testcontainers. Each suite also
   gained a guard test asserting its live facts are skipped exactly when the suite cannot run, so
   the early-return shape cannot come back unnoticed.
+- **A rotation cycle that fails outright is no longer silent.** `EncryptionRotationHostedService.ExecuteAsync` caught cycle-level failures with a bare `catch { }`. If `IRotationSource.EnumerateAsync` threw every cycle - a bad connection string, a migration holding a lock, a permission change - no row was reached, so no per-row counter moved, and `RotationCycleDuration`, `SetLastCycleSnapshot` and `RotationRowErrors` all sit past the throw and never emitted either. The service stayed alive and healthy-looking indefinitely while rotation never ran once, with nothing in the logs and nothing on a dashboard to say so. The failure is now logged at `Error` with the exception (via `[LoggerMessage]`, like the row-failure and observer-fault paths beside it) and counted on the new `orion.vault.rotation.cycle_failures`. The loop still survives the failure and retries on the next tick.
+
+  **The report carries what the cycle actually did.** A cycle that fails part-way - `EnumerateAsync` yielding several pages and then losing its connection - has really rotated the rows it already wrote, and those writes are committed. `RunCycleAsync` now wraps a part-way failure in a new `OrionVaultRotationCycleException` whose `Partial` carries the tallies read at the instant of the throw, and the log line names them and says plainly that the cycle did **not** complete, so "rotated=4000, did not complete" can never be misread as a finished sweep by someone deciding whether to re-run. A failure that never reached a row is not wrapped, so zero there is the truth rather than a default. The last-cycle gauges are deliberately left untouched on failure: they are the "rotation completed recently" liveness signal, and writing a failed cycle into them would make a stalled host look freshly swept.
+
+  A cycle that **completed** and then faulted while disposing its service scope is a different event - its tallies were already emitted - so it is reported on its own `Warning` and is not counted as a failed cycle, rather than double-counting a cycle that worked.
+
+- **`EncryptionRotator.NeedsRotation` no longer declares a value that was never ciphertext to be already on the active key.** It gated only on 2 bytes and then judged on the first two alone, never on `CipherFormat.MinimumCiphertextLength` (30). So a column a plaintext-to-encrypted migration left behind as raw bytes - or any truncated blob - whose leading two bytes happened to equal the active key id was reported healthy: counted as **skipped**, written to no log, never encrypted. A sweep over a table still holding plaintext came back with zero errors. A value below the envelope minimum is now surfaced as an `OrionVaultDecryptionException` instead, because it is neither "skipped" nor safe to re-encrypt - encrypting it would bury an unencrypted value under a key and destroy the evidence that the column was never migrated. Both sweeps therefore count such a row as an **error** and leave its bytes untouched: `ReencryptionRunner` through its per-row guard, and `EncryptionRotationHostedService` through the same guard, which the `NeedsRotation` call now sits inside rather than in front of.
+
+- **The re-encryption pass no longer steps over rows when the table changes under it.** `ReencryptionRunner` paged with `Skip(offset)/Take(BatchSize)`, justified by the ordering key being immutable - which is true of the ORDER but says nothing about the OFFSET. Every concurrent delete of a row sorting below the current offset shifted the window down by one and the pass walked straight past exactly one row it had never visited. That row kept the revoked key indefinitely and the final report showed it as neither scanned nor errored, so an operator who ran a rotation after a key compromise was told the sweep was clean while rows were still readable under the retired key. The runner now pages by keyset (resume from the previous batch's last key), which cannot be moved by deletes below it.
+
+  **Breaking:** `ReencryptionPlan.For<TEntity>(orderBy)` is replaced by `ReencryptionPlan.For<TEntity, TKey>(keySelector)`, because a keyset cursor needs the key itself rather than an opaque ordering delegate. Change `ReencryptionPlan.For<RawCustomer>(q => q.OrderBy(c => c.Id))` to `ReencryptionPlan.For<RawCustomer, Guid>(c => c.Id)`. The key must be unique, unencrypted, and stable for the duration of the pass - the same requirement the ordering delegate already carried.
+- **A row the re-encryption pass counted as an error no longer has its half-rotated columns written to the table.** `ReencryptionRunner.ProcessRow` rewrites each encrypted column on the tracked entity as it goes, so when the second column failed to decrypt the first column's new ciphertext was still sitting on the entity when the batch `SaveChangesAsync` ran - and was persisted. The report said `errors=1, reEncrypted=0`, so an operator who rotated after an incident read "one unreadable row, nothing migrated" while that row was in fact half on the new key. Worse, it never converged: every later pass saw column 1 already active, failed on column 2 again, and reported the same misleading pair forever. The runner now detaches the entity when a row throws, so an errored row is a row the pass did not touch and the report matches the table.
 
 ### Security
 
@@ -88,6 +100,14 @@ All notable changes to OrionVault are recorded here. Format follows [Keep a Chan
   generic `CS0618` a project may already suppress wholesale.
 
   Reference `OrionVault.Testing` with `PrivateAssets="all"`.
+
+### Added
+
+#### `orion.vault.rotation.cycle_failures` counter
+
+`Counter<long>` incremented once per rotation cycle that did not COMPLETE - an unreachable database, a migration holding a lock, a revoked permission, a connection dropping between pages. Every other end-of-cycle signal (the duration histogram, the `last_cycle.*` gauges) is emitted after the sweep and such a cycle never gets there, so this counter is the only one that fires. It is the signal to alert on for "the rotation host is up but rotation is not finishing". Pair it with `orion.vault.rotation.last_cycle_at_unix_seconds` going stale.
+
+It does **not** mean zero work was done. A cycle can rotate rows and then fail, and `rotation.rows_rotated` / `rows_skipped` / `row_errors` include that partial work because they are incremented row by row - so an increment here next to rising row counters reads as "this cycle did some of its work and then stopped", not as a contradiction. A cycle that completed and only faulted while disposing its service scope is deliberately **not** counted here; it is logged on its own at `Warning` so it cannot be mistaken for an incomplete sweep.
 
 ## [0.5.0] - 2026-07-28
 

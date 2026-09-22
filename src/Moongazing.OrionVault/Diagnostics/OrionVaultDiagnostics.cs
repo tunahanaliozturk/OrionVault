@@ -31,6 +31,7 @@ public sealed class OrionVaultDiagnostics : OrionInstrumentation
     internal Counter<long> RotationRowsRotated { get; }
     internal Counter<long> RotationRowsSkipped { get; }
     internal Counter<long> RotationRowErrors { get; }
+    internal Counter<long> RotationCycleFailures { get; }
     internal Histogram<double> RotationCycleDuration { get; }
     internal Histogram<int> EncryptionPayloadSize { get; }
     internal Histogram<int> DecryptionPayloadSize { get; }
@@ -138,6 +139,22 @@ public sealed class OrionVaultDiagnostics : OrionInstrumentation
             "Rows already on the active key id (NeedsRotation returned false).");
         RotationRowErrors = Meter.CreateCounter<long>("orion.vault.rotation.row_errors", "{rows}",
             "Rows that threw during decrypt or re-encrypt (cycle continues; rows are not aborted).");
+        // Cycles that did not COMPLETE - a bad connection string, a migration holding a lock, a
+        // revoked permission, a connection dropping between pages. Every other end-of-cycle signal
+        // (cycle_duration_ms, the last_cycle.* gauges) is emitted after the sweep and such a
+        // failure never gets there, so this is the only one that moves: without it the background
+        // service looks alive and healthy while rotation has not finished once. Alert on any
+        // non-zero rate.
+        //
+        // It does NOT mean zero work: a cycle can rotate rows and then fail, and the rows_rotated /
+        // rows_skipped / row_errors counters include that partial work because they are incremented
+        // row by row. So an increment here paired with rising row counters is not a contradiction -
+        // it reads as "this cycle did some of its work and then stopped". A cycle that completed and
+        // only faulted while disposing its scope is not counted here at all; that is logged on its
+        // own so it cannot be mistaken for an incomplete sweep.
+        RotationCycleFailures = Meter.CreateCounter<long>("orion.vault.rotation.cycle_failures", "{cycles}",
+            "Rotation cycles that did not complete. A failed cycle may have rotated rows before it threw; "
+            + "the rows_rotated / rows_skipped / row_errors counters include that partial work.");
         RotationCycleDuration = Meter.CreateHistogram<double>("orion.vault.rotation.cycle_duration_ms", "ms",
             "Wall-clock duration of one rotation cycle.");
         // v0.2.17 distribution of plaintext payload size in bytes per encrypt call.
