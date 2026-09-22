@@ -59,6 +59,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Moongazing.OrionVault.Hashi
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Moongazing.OrionVault.HashiCorpVault.IntegrationTests", "test\Moongazing.OrionVault.HashiCorpVault.IntegrationTests\Moongazing.OrionVault.HashiCorpVault.IntegrationTests.csproj", "{04F02C77-A80C-4AAF-87D7-71F05CD9F269}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Moongazing.OrionVault.EntityFrameworkCore.IntegrationTests", "test\Moongazing.OrionVault.EntityFrameworkCore.IntegrationTests\Moongazing.OrionVault.EntityFrameworkCore.IntegrationTests.csproj", "{C98FC219-F49A-453B-8C9B-F286FDCA7E17}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -345,6 +347,18 @@ Global
 		{04F02C77-A80C-4AAF-87D7-71F05CD9F269}.Release|x64.Build.0 = Release|Any CPU
 		{04F02C77-A80C-4AAF-87D7-71F05CD9F269}.Release|x86.ActiveCfg = Release|Any CPU
 		{04F02C77-A80C-4AAF-87D7-71F05CD9F269}.Release|x86.Build.0 = Release|Any CPU
+		{C98FC219-F49A-453B-8C9B-F286FDCA7E17}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C98FC219-F49A-453B-8C9B-F286FDCA7E17}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C98FC219-F49A-453B-8C9B-F286FDCA7E17}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{C98FC219-F49A-453B-8C9B-F286FDCA7E17}.Debug|x64.Build.0 = Debug|Any CPU
+		{C98FC219-F49A-453B-8C9B-F286FDCA7E17}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{C98FC219-F49A-453B-8C9B-F286FDCA7E17}.Debug|x86.Build.0 = Debug|Any CPU
+		{C98FC219-F49A-453B-8C9B-F286FDCA7E17}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C98FC219-F49A-453B-8C9B-F286FDCA7E17}.Release|Any CPU.Build.0 = Release|Any CPU
+		{C98FC219-F49A-453B-8C9B-F286FDCA7E17}.Release|x64.ActiveCfg = Release|Any CPU
+		{C98FC219-F49A-453B-8C9B-F286FDCA7E17}.Release|x64.Build.0 = Release|Any CPU
+		{C98FC219-F49A-453B-8C9B-F286FDCA7E17}.Release|x86.ActiveCfg = Release|Any CPU
+		{C98FC219-F49A-453B-8C9B-F286FDCA7E17}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -373,5 +387,6 @@ Global
 		{5A0528F7-670D-40B4-9483-2C785A7B8ABB} = {0C88DD14-F956-CE84-757C-A364CCF449FC}
 		{28E133BE-18F0-45F4-9541-6250CF0C5B9C} = {0C88DD14-F956-CE84-757C-A364CCF449FC}
 		{04F02C77-A80C-4AAF-87D7-71F05CD9F269} = {0C88DD14-F956-CE84-757C-A364CCF449FC}
+		{C98FC219-F49A-453B-8C9B-F286FDCA7E17} = {0C88DD14-F956-CE84-757C-A364CCF449FC}
 	EndGlobalSection
 EndGlobal

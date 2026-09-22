@@ -1,9 +1,11 @@
 namespace Moongazing.OrionVault.EntityFrameworkCore.Internal;
 
+using System.Text;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata;
 using Moongazing.OrionVault.Abstractions;
 using Moongazing.OrionVault.Exceptions;
+using Moongazing.OrionVault.Internal;
 
 internal sealed class EncryptionConfigurator : IEncryptionConfigurator
 {
@@ -33,6 +35,7 @@ internal sealed class EncryptionConfigurator : IEncryptionConfigurator
                 if (prop.ClrType == typeof(string) || prop.ClrType == typeof(byte[]))
                 {
                     prop.SetValueConverter(_factory.For(prop.ClrType));
+                    WidenMaxLengthForEnvelope(prop, prop.ClrType);
                     continue;
                 }
 
@@ -51,6 +54,9 @@ internal sealed class EncryptionConfigurator : IEncryptionConfigurator
                 {
                     var composed = existing.ComposeWith(_factory.For(existing.ProviderClrType));
                     prop.SetValueConverter(composed);
+                    // The declared length was sized for what the EXISTING converter produced, so that
+                    // is the plaintext the envelope now wraps - not the CLR type of the property.
+                    WidenMaxLengthForEnvelope(prop, existing.ProviderClrType);
                     continue;
                 }
 
@@ -61,6 +67,37 @@ internal sealed class EncryptionConfigurator : IEncryptionConfigurator
                     "Supported types: string, byte[].");
             }
         }
+    }
+
+    /// <summary>
+    /// The column now stores ciphertext, so a <c>MaxLength</c> the consumer sized for plaintext no
+    /// longer describes what has to fit. Widen it to cover the AES-GCM envelope of a maximum-length
+    /// plaintext; a store that enforces length would otherwise reject the write, or - far worse -
+    /// truncate it, cutting the GCM tag and leaving a row no key can ever decrypt.
+    /// </summary>
+    /// <remarks>
+    /// The facet is widened rather than cleared. Clearing it (unbounded binary) would silently turn
+    /// every encrypted column into <c>varbinary(max)</c> / <c>BLOB</c>, throwing away the consumer's
+    /// stated size budget, the index-width limits it keeps them inside, and any row-size planning
+    /// built on it. Widening keeps the column bounded and keeps the consumer's intent legible.
+    /// </remarks>
+    private static void WidenMaxLengthForEnvelope(IMutableProperty prop, Type plaintextProviderType)
+    {
+        if (prop.GetMaxLength() is not int declared || declared < 0)
+        {
+            // Unbounded already: nothing to widen, and nothing to overflow.
+            return;
+        }
+
+        // A string's MaxLength counts CHARACTERS (UTF-16 code units) but the encryptor consumes UTF-8
+        // BYTES, and outside the ASCII range that is more than one byte per character. GetMaxByteCount
+        // is the framework's own worst case (3n + 3: three bytes per BMP code unit, plus room for a
+        // dangling surrogate), so the widened column fits any string the consumer's own facet admits.
+        var plaintextBytes = plaintextProviderType == typeof(string)
+            ? Encoding.UTF8.GetMaxByteCount(declared)
+            : declared;
+
+        prop.SetMaxLength(CipherFormat.MinimumCiphertextLength + plaintextBytes);
     }
 
     private static bool ShouldEncrypt(IMutableProperty prop)

@@ -232,6 +232,24 @@ It does **not** mean zero work was done. A cycle can rotate rows and then fail, 
   | --- | --- | --- |
   | AWS KMS | `KMSInvalidStateException`, `DisabledException`, `NotFoundException`, `InvalidCiphertextException`, `IncorrectKeyException`, `AccessDenied` / HTTP 403 | `LimitExceededException`, `KMSInternalException`, `DependencyTimeoutException`, 429, 5xx |
   | Azure Key Vault | `RequestFailedException` 403, 404, 409 | 429, 5xx |
+- **BREAKING: `MaxLength` on an encrypted column is now widened to fit the encryption envelope.**
+  `EncryptionConfigurator` attached the value converter but never touched the length facet, so a
+  `[Encrypted] [MaxLength(64)]` string still declared a 64-wide column while the AES-GCM envelope
+  adds a fixed 30 bytes on top of the UTF-8 plaintext. The declared length is now
+  `30 + Encoding.UTF8.GetMaxByteCount(n)` for a string facet (a `MaxLength` on a string counts
+  characters, and a character is up to three UTF-8 bytes) and `30 + n` for a `byte[]` facet. A column
+  the consumer left unbounded stays unbounded. The facet is widened rather than cleared so the
+  column stays bounded and the consumer's size budget stays legible.
+
+  **This changes the generated DDL, so an existing database needs a migration that widens every
+  encrypted column.** Until it is applied, a length-enforcing store keeps behaving as it did — which
+  the new container-backed suite now settles rather than guesses: SQL Server 2022 **rejects** the
+  write with error 2628 ("String or binary data would be truncated"), while MySQL 8.4 with
+  `sql_mode` cleared **silently truncates** it, storing 64 of the 70 bytes. A truncated envelope has
+  lost its AES-GCM tag and the tail of its ciphertext, so the row can never be decrypted with any
+  key: the plaintext is gone, and the only signal was a warning. Nothing at the ADO layer protects
+  you either — EF Core stamps `DbParameter.Size` from `MaxLength` while the value fits, but *widens*
+  the parameter to the store maximum when it overflows, leaving the decision entirely to the column.
 
 ## [0.5.0] - 2026-07-28
 
