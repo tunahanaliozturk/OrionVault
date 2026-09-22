@@ -687,6 +687,104 @@ public sealed class ReencryptionRunnerTests : IDisposable
     }
 
     [Fact]
+    public async Task A_row_that_fails_on_a_later_column_persists_no_partial_rotation()
+    {
+        // Regression: ProcessRow mutates the tracked entity column by column. When the SECOND
+        // encrypted column throws, the FIRST column already carries its freshly rotated ciphertext
+        // on that entity - and the batch SaveChanges happily writes it. The report meanwhile says
+        // errors=1, reEncrypted=0: an operator reads "one bad row, nothing rotated" while the row
+        // is now half on the new key. A later pass sees column 1 already active, fails on column 2
+        // again, and the tally never converges on what the table actually holds.
+        await using (var seedSp = BuildEncryptingHost(activeKeyId: 1, withBlindIndex: false, activeIndexVersion: 0))
+        {
+            using var scope = seedSp.CreateScope();
+            var ctx = scope.ServiceProvider.GetRequiredService<EncryptingCtx>();
+            await ctx.Database.EnsureCreatedAsync();
+            ctx.Customers.Add(new Customer
+            {
+                Id = Guid.NewGuid(),
+                Name = "n",
+                Email = "partial@x.com",
+                EmailIndex = [],
+                IdScan = [4, 5, 6],
+            });
+            await ctx.SaveChangesAsync();
+        }
+
+        await using var sp = BuildMaintenanceHost(withBlindIndex: false);
+
+        byte[] emailBefore;
+        byte[] scanBefore;
+        using (var scope = sp.CreateScope())
+        {
+            var raw = scope.ServiceProvider.GetRequiredService<RawCtx>();
+            var row = await raw.Customers.SingleAsync();
+            emailBefore = row.Email!;
+
+            // Corrupt ONLY the IdScan auth tag: the 2-byte key-id header still reads 1 (so the
+            // runner decides the column needs rotation) and the length is still legal, so the
+            // failure lands squarely on the decrypt - exactly the "one unreadable column" shape.
+            var broken = (byte[])row.IdScan!.Clone();
+            broken[^1] ^= 0xFF;
+            row.IdScan = broken;
+            await raw.SaveChangesAsync();
+            scanBefore = broken;
+        }
+
+        // Email is listed FIRST so it rotates successfully before IdScan throws.
+        var plan = ReencryptionPlan.For<RawCustomer>(q => q.OrderBy(c => c.Id))
+            .WithColumn(EncryptedColumnPlan.ForString<RawCustomer>(
+                nameof(RawCustomer.Email), c => c.Email, (c, v) => c.Email = v))
+            .WithColumn(EncryptedColumnPlan.ForBytes<RawCustomer>(
+                nameof(RawCustomer.IdScan), c => c.IdScan, (c, v) => c.IdScan = v));
+
+        ReencryptionReport first;
+        using (var scope = sp.CreateScope())
+        {
+            var runner = scope.ServiceProvider.GetRequiredService<IEncryptionMaintenance>();
+            var ctx = scope.ServiceProvider.GetRequiredService<RawCtx>();
+            first = await runner.RunAsync(ctx, plan);
+        }
+
+        // The report is the operator's only view of the pass: an errored row is neither rotated
+        // nor skipped.
+        first.Scanned.Should().Be(1);
+        first.ReEncrypted.Should().Be(0);
+        first.Skipped.Should().Be(0);
+        first.Errors.Should().Be(1);
+
+        // ... and the stored bytes must agree with it: NOTHING of that row reached the table, so
+        // Email is still byte-for-byte the key-1 envelope it was seeded with.
+        using (var scope = sp.CreateScope())
+        {
+            var raw = scope.ServiceProvider.GetRequiredService<RawCtx>();
+            var after = await raw.Customers.SingleAsync();
+            after.Email.Should().Equal(emailBefore);
+            after.Email![1].Should().Be(1); // still on the OLD key - not half-migrated
+            after.IdScan.Should().Equal(scanBefore);
+        }
+
+        // A second pass reports exactly the same thing, because the row is in exactly the same
+        // state: the tally converges on reality instead of drifting with every run.
+        ReencryptionReport second;
+        using (var scope = sp.CreateScope())
+        {
+            var runner = scope.ServiceProvider.GetRequiredService<IEncryptionMaintenance>();
+            var ctx = scope.ServiceProvider.GetRequiredService<RawCtx>();
+            second = await runner.RunAsync(ctx, plan);
+        }
+
+        second.Should().Be(first);
+
+        using (var scope = sp.CreateScope())
+        {
+            var raw = scope.ServiceProvider.GetRequiredService<RawCtx>();
+            var after = await raw.Customers.SingleAsync();
+            after.Email.Should().Equal(emailBefore);
+        }
+    }
+
+    [Fact]
     public async Task A_multi_batch_run_completes_correctly_and_does_not_retain_prior_batch_entities()
     {
         // Seed more rows than the batch size so the run spans several batches. The change tracker

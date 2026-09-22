@@ -1,4 +1,4 @@
-<!-- markdownlint-disable MD024 -->
+﻿<!-- markdownlint-disable MD024 -->
 
 # Changelog
 
@@ -88,6 +88,9 @@ All notable changes to OrionVault are recorded here. Format follows [Keep a Chan
   generic `CS0618` a project may already suppress wholesale.
 
   Reference `OrionVault.Testing` with `PrivateAssets="all"`.
+### Fixed
+
+- **A row the re-encryption pass counted as an error no longer has its half-rotated columns written to the table.** `ReencryptionRunner.ProcessRow` rewrites each encrypted column on the tracked entity as it goes, so when the second column failed to decrypt the first column's new ciphertext was still sitting on the entity when the batch `SaveChangesAsync` ran - and was persisted. The report said `errors=1, reEncrypted=0`, so an operator who rotated after an incident read "one unreadable row, nothing migrated" while that row was in fact half on the new key. Worse, it never converged: every later pass saw column 1 already active, failed on column 2 again, and reported the same misleading pair forever. The runner now detaches the entity when a row throws, so an errored row is a row the pass did not touch and the report matches the table.
 
 ## [0.5.0] - 2026-07-28
 

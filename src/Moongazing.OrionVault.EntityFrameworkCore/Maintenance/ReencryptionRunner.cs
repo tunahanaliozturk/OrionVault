@@ -99,7 +99,7 @@ public sealed partial class ReencryptionRunner : IEncryptionMaintenance
                 break;
             }
 
-            var batchReport = ProcessBatch(plan, batch, activeKeyId, activeIndexVersion);
+            var batchReport = ProcessBatch(context, plan, batch, activeKeyId, activeIndexVersion);
             // Persist this batch before moving on so an interruption leaves a prefix of the table
             // already migrated (resumable). SaveChanges only writes the rows actually mutated.
             await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
@@ -134,6 +134,7 @@ public sealed partial class ReencryptionRunner : IEncryptionMaintenance
     }
 
     private ReencryptionReport ProcessBatch<TEntity>(
+        DbContext context,
         ReencryptionPlan<TEntity> plan,
         List<TEntity> batch,
         short activeKeyId,
@@ -172,6 +173,20 @@ public sealed partial class ReencryptionRunner : IEncryptionMaintenance
 #pragma warning restore CA1031
             {
                 errors++;
+                // ProcessRow writes each column back as it goes, so a failure on the SECOND
+                // encrypted column leaves the FIRST column's freshly rotated ciphertext sitting on
+                // the tracked entity - and this batch's SaveChanges would persist it while the
+                // report says errors=1, reEncrypted=0. Detaching drops the whole entity from the
+                // change tracker, so an errored row is a row the pass did not touch: the report and
+                // the table agree, and a re-run sees the same state instead of a half-migrated one
+                // that fails on the same column forever.
+                //
+                // Detaching rather than reverting the mutated columns: reverting would leave the
+                // entity attached and rely on EF's byte[] change detection deciding the restored
+                // value is "unchanged", and a per-column try/catch would keep the row attached too
+                // AND break the documented report invariant that a row is re-encrypted, skipped, or
+                // errored - never partly each.
+                context.Entry(entity).State = EntityState.Detached;
                 LogRowFailed(ex);
             }
         }
