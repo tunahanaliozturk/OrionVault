@@ -785,6 +785,63 @@ public sealed class ReencryptionRunnerTests : IDisposable
     }
 
     [Fact]
+    public async Task A_never_encrypted_column_is_reported_as_an_error_not_as_already_on_the_active_key()
+    {
+        // Regression: a column left behind by a plaintext-to-encrypted migration - raw bytes, no
+        // AES-GCM envelope. NeedsRotation used to judge purely on the first two bytes after a
+        // 2-byte length gate, so any such value whose leading two bytes happened to equal the
+        // active key id read as "already on the active key" and was counted as SKIPPED. The sweep
+        // then reported a clean pass over a table still holding plaintext. A value this short is
+        // not ciphertext, so it is neither skipped nor silently re-encrypted (that would bury an
+        // unencrypted value under a key instead of reporting it) - it is surfaced as a failed row
+        // and left exactly as it was found, for a human to look at.
+        await using var sp = BuildMaintenanceHost(withBlindIndex: false); // active key 2
+
+        // 0x00 0x02 is big-endian key id 2 - the ACTIVE id - followed by raw text. Too short to be
+        // an envelope, and previously indistinguishable from a healthy row.
+        byte[] neverEncrypted = [0x00, 0x02, .. "left-behind"u8];
+        var rowId = Guid.NewGuid();
+        using (var seedScope = sp.CreateScope())
+        {
+            var raw = seedScope.ServiceProvider.GetRequiredService<RawCtx>();
+            await raw.Database.EnsureCreatedAsync();
+            raw.Customers.Add(new RawCustomer
+            {
+                Id = rowId,
+                Name = "n",
+                Email = neverEncrypted,
+                EmailIndex = [],
+                IdScan = null,
+            });
+            await raw.SaveChangesAsync();
+        }
+
+        ReencryptionReport report;
+        using (var scope = sp.CreateScope())
+        {
+            var runner = scope.ServiceProvider.GetRequiredService<IEncryptionMaintenance>();
+            var ctx = scope.ServiceProvider.GetRequiredService<RawCtx>();
+            report = await runner.RunAsync(ctx, EmailPlan(withBlindIndex: false));
+        }
+
+        // The report is the whole point: "skipped=1, errors=0" would be the sweep telling an
+        // operator the row is safely on the active key while it holds no ciphertext at all.
+        report.Scanned.Should().Be(1);
+        report.Errors.Should().Be(1);
+        report.Skipped.Should().Be(0);
+        report.ReEncrypted.Should().Be(0);
+
+        // The value is left byte-for-byte alone - not re-encrypted, which would have destroyed the
+        // evidence that this column was never migrated.
+        using (var afterScope = sp.CreateScope())
+        {
+            var raw = afterScope.ServiceProvider.GetRequiredService<RawCtx>();
+            var stored = await raw.Customers.Where(c => c.Id == rowId).Select(c => c.Email).SingleAsync();
+            stored.Should().Equal(neverEncrypted);
+        }
+    }
+
+    [Fact]
     public async Task A_concurrent_delete_below_the_cursor_does_not_make_the_pass_step_over_a_row()
     {
         // Regression: offset paging (Skip(offset)/Take) over a LIVE table. The comment that used to

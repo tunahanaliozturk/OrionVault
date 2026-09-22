@@ -68,14 +68,18 @@ public sealed partial class EncryptionRotationHostedService<THandle> : Backgroun
         {
             cancellationToken.ThrowIfCancellationRequested();
             scanned++;
-            if (!EncryptionRotator.NeedsRotation(candidate.Ciphertext, activeKeyId))
-            {
-                skipped++;
-                diagnostics?.RotationRowsSkipped.Add(1);
-                continue;
-            }
             try
             {
+                // Inside the per-row guard: NeedsRotation rejects a blob too short to be an
+                // envelope, and that verdict belongs in the error count next to a failed decrypt -
+                // not escaping the loop and taking the whole cycle down.
+                if (!EncryptionRotator.NeedsRotation(candidate.Ciphertext, activeKeyId))
+                {
+                    skipped++;
+                    diagnostics?.RotationRowsSkipped.Add(1);
+                    continue;
+                }
+
                 var fresh = EncryptionRotator.Rotate(encryptor, candidate.Ciphertext);
                 await source.UpdateAsync(candidate.Handle, fresh, cancellationToken).ConfigureAwait(false);
                 rotated++;

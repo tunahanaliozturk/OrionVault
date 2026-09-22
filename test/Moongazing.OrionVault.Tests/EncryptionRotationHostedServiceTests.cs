@@ -156,6 +156,30 @@ public sealed class EncryptionRotationHostedServiceTests
     }
 
     [Fact]
+    public async Task RunCycleAsync_counts_a_value_too_short_to_be_an_envelope_as_an_error_not_a_skip()
+    {
+        // A row holding a value that is not an envelope - a plaintext leftover, a truncated blob -
+        // whose first two bytes happen to equal the ACTIVE key id (0x00 0x01 == 1). It used to read
+        // as "already on the active key" and land in the skipped column, so a cycle over a table
+        // full of them reported a clean sweep. It is a failed row, and the cycle carries on past it
+        // rather than dying on it.
+        var (sp, source) = BuildHost(activeKeyId: 1);
+        var encryptor = sp.GetRequiredService<IEncryptor>();
+        source.Rows[1] = [0x00, 0x01, .. "not a ciphertext"u8];
+        source.Rows[2] = encryptor.EncryptBytes([7, 7]); // healthy, already on the active key
+
+        using var sut = NewHost(sp);
+        var result = await sut.RunCycleAsync(CancellationToken.None);
+
+        Assert.Equal(2, result.Scanned);
+        Assert.Equal(1, result.Errors);
+        Assert.Equal(1, result.Skipped);
+        Assert.Equal(0, result.Rotated);
+        Assert.Empty(source.Updates);
+        await sp.DisposeAsync();
+    }
+
+    [Fact]
     public void Options_validate_at_construction()
     {
         var (sp, _) = BuildHost(activeKeyId: 1);

@@ -1,6 +1,8 @@
 namespace Moongazing.OrionVault.Rotation;
 
 using Moongazing.OrionVault.Abstractions;
+using Moongazing.OrionVault.Exceptions;
+using Moongazing.OrionVault.Internal;
 
 /// <summary>
 /// Helper that re-encrypts a single ciphertext blob from its current key id to the
@@ -31,14 +33,28 @@ public static class EncryptionRotator
     /// key id different from <paramref name="activeKeyId"/>. Read-only - does NOT decrypt
     /// or invoke the encryptor.
     /// </summary>
+    /// <exception cref="OrionVaultDecryptionException">
+    /// <paramref name="ciphertext"/> is shorter than the shortest well-formed envelope
+    /// (<c>[keyId:2 | nonce:12 | tag:16]</c> = 30 bytes), so it is not an envelope at all: a
+    /// never-encrypted value left behind by a plaintext-to-encrypted migration, or a truncated
+    /// blob. Such a value has no key id to answer about, and answering "false" would declare it
+    /// already on the active key - which is how a rotation sweep ends up reporting a clean pass
+    /// over a column that was never encrypted, as long as its first two bytes happened to match
+    /// the active key id. Surfacing it lets the caller count the row as the failure it is, and it
+    /// is the same exception decrypting the value would raise.
+    /// </exception>
     public static bool NeedsRotation(byte[] ciphertext, short activeKeyId)
     {
         ArgumentNullException.ThrowIfNull(ciphertext);
-        if (ciphertext.Length < 2)
+        if (ciphertext.Length < CipherFormat.MinimumCiphertextLength)
         {
-            // Too short to even carry a header - treat as no-op rather than throwing so
-            // a rotation loop can skip malformed rows without aborting.
-            return false;
+            // Deliberately NOT "false": a two-byte length gate would let any short blob whose
+            // first two bytes happen to equal the active key id pass as healthy. And deliberately
+            // not re-encrypting it either - the value was never ciphertext, so encrypting it would
+            // bury an unencrypted value under a key instead of reporting it.
+            throw new OrionVaultDecryptionException(
+                $"Ciphertext length {ciphertext.Length} is below the minimum {CipherFormat.MinimumCiphertextLength}; " +
+                "the value is not an OrionVault envelope, so no key id can be read from it.");
         }
         // Header is [keyId:2 | nonce:12 | tag:16 | ciphertext:N]; CipherFormat writes
         // the key id big-endian (BinaryPrimitives.WriteInt16BigEndian) so we decode the
