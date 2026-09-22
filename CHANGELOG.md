@@ -6,6 +6,18 @@ All notable changes to OrionVault are recorded here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+### Fixed
+
+- **The Cloud KMS and Key Vault live suites report as skipped instead of passing vacuously.**
+  Both returned early when their `ORIONVAULT_*` environment variables were absent, and CI sets
+  none of them, so four tests reported green while asserting nothing. They now carry a
+  discovery-time skip attribute - the shape the HashiCorp Vault suite already used here, and the
+  `DockerFact` attribute the sibling OrionLock repository uses - so a missing-config run says
+  *Skipped* with the reason. A full-suite run goes from **2 skipped** to **6 skipped**; the AWS
+  suite is unaffected because it genuinely runs on LocalStack via Testcontainers. Each suite also
+  gained a guard test asserting its live facts are skipped exactly when the suite cannot run, so
+  the early-return shape cannot come back unnoticed.
+
 ### Security
 
 - **`OrionVault.Testing` no longer ships an encryptor that writes plaintext, and its zero-key
