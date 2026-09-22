@@ -89,6 +89,8 @@ public sealed class KeyedOrionVaultModelCustomizer<TDbContext> : IModelCustomize
                 "KeyedOrionVaultModelCustomizer requires UseApplicationServiceProvider on the " +
                 "DbContextOptionsBuilder so the application's keyed services are visible.");
 
+        OrionVaultModelCacheKeyFactory.EnsureActive(context);
+
         var binding = applicationSp.GetRequiredService<KeyedOrionVaultBinding<TDbContext>>();
         var configurator = applicationSp.GetRequiredKeyedService<IEncryptionConfigurator>(binding.ProviderName);
         configurator.Configure(modelBuilder);

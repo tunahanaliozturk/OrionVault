@@ -118,7 +118,8 @@ All notable changes to OrionVault are recorded here. Format follows [Keep a Chan
   `IModelCacheKeyFactory` with the new public `OrionVaultModelCacheKeyFactory`, which adds the bound
   key provider to the cache key. If you assemble `DbContextOptions` by hand alongside
   `KeyedOrionVaultModelCustomizer<T>`, add
-  `opt.ReplaceService<IModelCacheKeyFactory, OrionVaultModelCacheKeyFactory>()` — it is not optional.
+  `opt.ReplaceService<IModelCacheKeyFactory, OrionVaultModelCacheKeyFactory>()` — it is not optional,
+  and the customizer now refuses to build the model without it rather than leak silently.
 
   The discriminator is an opaque per-instance identity, minted on first use and held against the
   provider in a `ConditionalWeakTable`. Two distinct provider instances can never collide, whatever
@@ -132,6 +133,25 @@ All notable changes to OrionVault are recorded here. Format follows [Keep a Chan
   id space would be a network call per id against a KMS), so the identity is per instance instead.
   The cost is one compiled model per provider instance rather than per distinct key set; every
   `IKeyProvider` OrionVault registers is a container singleton, so that is one model per container.
+
+- **`UseOrionVault` no longer silently discards an `IModelCacheKeyFactory` the application had
+  already replaced.** `ReplaceService` keys its replacements on the service type alone, so a second
+  call for the same service overwrites the first and the earlier implementation is gone from the
+  options and from the built container alike. An application that discriminates its model on its own
+  dimension — schema- or table-per-tenant, the usual reason, and the same audience as this library —
+  lost it, and two contexts with identical keys but different model variants shared the first
+  model and queried the wrong schema. `AddOrionVaultDbContext<T>` made it unavoidable because it
+  applies the replacement after the caller's configuration callback.
+
+  OrionVault now captures the caller's factory before overwriting it and composes: the cache key is
+  a pair of whatever the inner factory produced and OrionVault's key-provider identity, so both
+  dimensions survive. The inner factory is EF Core's default when the application replaced nothing.
+
+  **Call `UseOrionVault` after your own `ReplaceService` calls.** Composition can only capture a
+  factory that is already on the options; a `ReplaceService<IModelCacheKeyFactory, …>` made
+  afterwards overwrites OrionVault's, and the options keep no record of it. That case is now a
+  refusal to build the model, with a message naming the displacing factory and the required order,
+  rather than a silent loss of the key discrimination.
 
 ### Security
 
