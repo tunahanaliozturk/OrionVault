@@ -16,6 +16,7 @@
     <PackageReference Include="FluentAssertions" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" />
     <PackageReference Include="MySqlConnector" />
+    <PackageReference Include="Docker.DotNet" />
     <PackageReference Include="Testcontainers.MsSql" />
     <PackageReference Include="Testcontainers.MySql" />
   </ItemGroup>

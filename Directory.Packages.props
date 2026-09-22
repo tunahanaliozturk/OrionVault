@@ -43,6 +43,9 @@
     <PackageVersion Include="Testcontainers.MySql" Version="3.10.0" />
     <PackageVersion Include="Microsoft.EntityFrameworkCore.SqlServer" Version="8.0.10" />
     <PackageVersion Include="MySqlConnector" Version="2.3.7" />
+    <!-- Already in the graph under Testcontainers; referenced directly so the Docker probe can
+         ping the daemon instead of guessing from a pipe name or a DOCKER_HOST variable. -->
+    <PackageVersion Include="Docker.DotNet" Version="3.125.15" />
   </ItemGroup>
   <!--
     Security pins for packages we do not reference directly. Each one is a transitive dependency

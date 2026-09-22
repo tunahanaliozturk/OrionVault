@@ -105,6 +105,15 @@ All notable changes to OrionVault are recorded here. Format follows [Keep a Chan
   provider lifetime" with no mention of a refresh path, and their DI extension remarks documented
   only the blocking startup unwrap. Both now describe the opt-in envelope-key cache alongside it,
   matching the GCP wording. The AWS README documents the required `KeyId` and why it is required.
+- **The container-suite Docker probe asked whether `DOCKER_HOST` was SET, not whether anything
+  answered there.** A CI agent carrying inherited remote-Docker configuration reported "available"
+  and ran every container test against an endpoint that was not there, so they failed instead of
+  skipping. The probe now pings the daemon, trying `DOCKER_HOST` and then the platform default —
+  the same order Testcontainers resolves, which takes the first endpoint that answers — with a
+  bounded timeout, and reports unavailable if neither does. It also replaces a Windows check that
+  was wrong the other way: `Directory.Exists(@"\\.\pipe")` is false even with Docker Desktop
+  running (the named-pipe filesystem only answers an enumeration of `\\.\pipe\`), which skipped
+  the whole suite on a machine that could have run it. The probe now has its own test.
 - **Two hosts of the same DbContext type with different keys could read each other's data.**
   OrionVault's value converters capture one `IEncryptor` by closure, and the converters live on the
   compiled model. EF Core's compiled-model cache is process-wide and its default key is the DbContext
