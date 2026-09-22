@@ -11,14 +11,15 @@ using Microsoft.Extensions.DependencyInjection;
 using Moongazing.OrionVault.DependencyInjection;
 using Moongazing.OrionVault.EntityFrameworkCore;
 using Moongazing.OrionVault.EntityFrameworkCore.DependencyInjection;
+using Moongazing.OrionVault.Exceptions;
 using Xunit;
 
 /// <summary>
 /// Pins the store-facing behaviour of an encrypted column on a real SQLite database: what the
 /// declared <see cref="MaxLengthAttribute"/> means once the envelope is added, whether an
-/// untouched row is rewritten on save, how null and empty values survive a round trip, what a
-/// unique index over a randomised ciphertext is worth, and what a LINQ filter over an encrypted
-/// column actually emits and returns.
+/// untouched row is rewritten on save, how null and empty values survive a round trip, that a
+/// unique index over a randomised ciphertext is refused at model build, and what a LINQ filter over
+/// an encrypted column actually emits and returns.
 /// <para>
 /// Shape follows <see cref="EndToEndEncryptionTests"/>: one open in-memory SQLite connection per
 /// test class instance, hosts built through the normal <c>AddOrionVault().UseEntityFrameworkCore</c>
@@ -65,10 +66,22 @@ public sealed class EncryptedColumnBehaviourTests : IDisposable
 
         public DbSet<Person> People => Set<Person>();
 
+        // The unique index the consumer would reach for lives in UniquePeopleCtx below, because it is
+        // now REFUSED at model build - see
+        // A_unique_index_on_an_encrypted_column_is_refused_at_model_build. Keeping it here would stop
+        // every other test in this class from building its model.
+    }
+
+    /// <summary>The consumer's stated invariant - one row per e-mail address - written the way that no longer builds.</summary>
+    public class UniquePeopleCtx : DbContext
+    {
+        public UniquePeopleCtx(DbContextOptions opt) : base(opt) { }
+
+        public DbSet<Person> People => Set<Person>();
+
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             ArgumentNullException.ThrowIfNull(modelBuilder);
-            // The consumer's stated invariant: one row per e-mail address.
             modelBuilder.Entity<Person>().HasIndex(p => p.Email).IsUnique();
         }
     }
@@ -345,38 +358,41 @@ public sealed class EncryptedColumnBehaviourTests : IDisposable
     // ---------------------------------------------------------------------------------------
 
     /// <summary>
-    /// DOCUMENTS A HAZARD (the behaviour is correct, the consequence is not obvious). The index is
-    /// built over the ciphertext, and AES-GCM uses a fresh nonce per write, so two rows holding the
-    /// same plaintext e-mail produce different ciphertexts and the unique index never fires. Any
-    /// uniqueness invariant a consumer believes <c>.IsUnique()</c> enforces on an encrypted column
-    /// is silently gone; it has to be carried by a blind-index column instead.
+    /// WAS A HAZARD NOTE, NOW AN ASSERTION. The index would be built over the ciphertext, and AES-GCM
+    /// uses a fresh nonce per write, so two rows holding the same plaintext e-mail produce different
+    /// ciphertexts and the unique index never fires: the uniqueness invariant a consumer believes
+    /// <c>.IsUnique()</c> enforces is silently gone. This used to be pinned as the (accepted)
+    /// behaviour - duplicates inserted, both read back. It is now refused at model build instead, and
+    /// the message has to name the property and point at the blind index, which is the feature that
+    /// IS deterministic and can carry the constraint.
     /// </summary>
     [Fact]
-    public async Task A_unique_index_on_an_encrypted_column_does_not_prevent_duplicate_plaintext()
+    public async Task A_unique_index_on_an_encrypted_column_is_refused_at_model_build()
     {
-        await using var sp = BuildHost();
+        await using var sp = new ServiceCollection()
+            .AddOrionVault(o =>
+            {
+                o.UseStaticKeys(k => k.Add(1, Key32B64));
+                o.ActiveKeyId = 1;
+            })
+            .UseEntityFrameworkCore<UniquePeopleCtx>()
+            .Services
+            .AddDbContext<UniquePeopleCtx>((s, o) => o.UseSqlite(conn).UseOrionVault(s))
+            .BuildServiceProvider();
+
         using var scope = sp.CreateScope();
-        var ctx = scope.ServiceProvider.GetRequiredService<PeopleCtx>();
-        await ctx.Database.EnsureCreatedAsync();
+        var ctx = scope.ServiceProvider.GetRequiredService<UniquePeopleCtx>();
 
-        ctx.Model.FindEntityType(typeof(Person))!
-            .GetIndexes()
-            .Should().Contain(i => i.IsUnique && i.Properties.Any(p => p.Name == nameof(Person.Email)),
-                "the fixture declares the index the consumer would rely on");
+        // Touching the model is what builds it; the refusal has to land here, before any row exists.
+        var build = () => ctx.Model.FindEntityType(typeof(Person));
 
-        ctx.People.Add(new Person { Id = Guid.NewGuid(), Name = "first", Email = "dupe@example.com" });
-        await ctx.SaveChangesAsync();
-        ctx.ChangeTracker.Clear();
+        var refusal = build.Should().Throw<OrionVaultConfigurationException>()
+            .WithMessage("*Person.Email*", "the message must name the offending property")
+            .And;
 
-        ctx.People.Add(new Person { Id = Guid.NewGuid(), Name = "second", Email = "dupe@example.com" });
-        var second = await ctx.SaveChangesAsync();
-
-        second.Should().Be(1, "the second insert is accepted: the unique index sees two different ciphertexts");
-        ctx.ChangeTracker.Clear();
-
-        var duplicates = await ctx.People.Where(p => p.Name == "first" || p.Name == "second").ToListAsync();
-        duplicates.Should().HaveCount(2);
-        duplicates.Should().OnlyContain(p => p.Email == "dupe@example.com");
+        refusal.Message.Should().Contain("unique index", "the refusal has to say what is wrong");
+        refusal.Message.Should().Contain(
+            "blind-index", "it has to point at the OrionVault feature that CAN carry the constraint");
     }
 
     // ---------------------------------------------------------------------------------------

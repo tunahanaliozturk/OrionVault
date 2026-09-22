@@ -24,6 +24,27 @@ All notable changes to OrionVault are recorded here. Format follows [Keep a Chan
   **zero rows with no error**: a "find every user at this domain" screen renders empty, and a
   GDPR-erasure `Where(…).ExecuteDelete()` deletes nothing and reports success. The analyzer now
   inspects the instance and every argument of any invocation inside the predicate lambda.
+- **BREAKING: an encrypted property that is a key, a foreign key, a concurrency token, or covered by
+  a unique index is now refused at model build.** `EncryptionConfigurator` never inspected any of
+  those roles, and all four fail silently: AES-GCM draws a fresh nonce per write, so the stored
+  ciphertext differs every time the same plaintext is saved. A `.IsUnique()` index over an encrypted
+  column accepts duplicates, an encrypted key or foreign key makes `Find()` and every join miss, and
+  an encrypted concurrency token turns every update into a phantom conflict. The model now fails to
+  build with an `OrionVaultConfigurationException` naming the property, saying which role it cannot
+  fill, and pointing at the blind index (`options.UseBlindIndex(...)` / `IBlindIndexProvider`), which
+  IS deterministic and can legitimately carry a unique index over the plaintext.
+
+  **A model that has such a property today stops building.** That is the point: it was never
+  enforcing what it looked like it enforced.
+
+- **BREAKING: `MaxLength` on an encrypted column is now widened to fit the encryption envelope.**
+  `EncryptionConfigurator` attached the value converter but never touched the length facet, so a
+  `[Encrypted] [MaxLength(64)]` string still declared a 64-wide column while the AES-GCM envelope
+  adds a fixed 30 bytes on top of the UTF-8 plaintext. The declared length is now
+  `30 + Encoding.UTF8.GetMaxByteCount(n)` for a string facet (a `MaxLength` on a string counts
+  characters, and a character is up to three UTF-8 bytes) and `30 + n` for a `byte[]` facet. A column
+  the consumer left unbounded stays unbounded. The facet is widened rather than cleared so the
+  column stays bounded and the consumer's size budget stays legible.
 
   **Breaking for a build.** The severity moved from `Warning` to `Error` because the diagnostic
   describes a predicate that is false for every row, which has no intentional version; a

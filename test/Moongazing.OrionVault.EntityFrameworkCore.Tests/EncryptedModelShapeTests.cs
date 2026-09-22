@@ -8,14 +8,15 @@ using Microsoft.Extensions.DependencyInjection;
 using Moongazing.OrionVault.DependencyInjection;
 using Moongazing.OrionVault.EntityFrameworkCore;
 using Moongazing.OrionVault.EntityFrameworkCore.DependencyInjection;
+using Moongazing.OrionVault.Exceptions;
 using Xunit;
 
 /// <summary>
 /// What OrionVault's model customizer does to the SHAPE of an encrypted property: how wide the
-/// column ends up once the envelope is accounted for.
+/// column ends up, and which model roles it refuses outright.
 /// <see cref="EncryptedColumnBehaviourTests"/> covers the store-facing behaviour and the minimum the
-/// widened facet has to satisfy; this pins the arithmetic itself, because the UTF-8 expansion is the
-/// part that is easy to get wrong.
+/// widened facet has to satisfy; this pins the arithmetic itself (the UTF-8 expansion is the part
+/// that is easy to get wrong) and the three refusals that class does not cover.
 /// </summary>
 public sealed class EncryptedModelShapeTests : IDisposable
 {
@@ -44,6 +45,123 @@ public sealed class EncryptedModelShapeTests : IDisposable
             .Services
             .AddDbContext<TContext>((sp, o) => o.UseSqlite(conn).UseOrionVault(sp))
             .BuildServiceProvider();
+
+    private static Action BuildModel<TContext>(ServiceProvider sp)
+        where TContext : DbContext =>
+        () =>
+        {
+            using var scope = sp.CreateScope();
+            _ = scope.ServiceProvider.GetRequiredService<TContext>().Model.GetEntityTypes().ToList();
+        };
+
+    // ---------------------------------------------------------------------------------------
+    // Refusals.
+    // ---------------------------------------------------------------------------------------
+
+    public class KeyedEntity
+    {
+        [Key]
+        [Encrypted]
+        public string Id { get; set; } = null!;
+    }
+
+    public class KeyedCtx : DbContext
+    {
+        public KeyedCtx(DbContextOptions opt) : base(opt) { }
+
+        public DbSet<KeyedEntity> Rows => Set<KeyedEntity>();
+    }
+
+    /// <summary>
+    /// An encrypted primary key re-encrypts to different bytes on every write, so <c>Find()</c> and
+    /// every join on it silently stop matching. Refused at model build.
+    /// </summary>
+    [Fact]
+    public void An_encrypted_primary_key_is_refused_at_model_build()
+    {
+        using var sp = BuildHost<KeyedCtx>();
+
+        BuildModel<KeyedCtx>(sp).Should().Throw<OrionVaultConfigurationException>()
+            .WithMessage("*KeyedEntity.Id*")
+            .And.Message.Should().Contain("key");
+    }
+
+    public class Parent
+    {
+        public Guid Id { get; set; }
+        public string Code { get; set; } = null!;
+    }
+
+    public class Child
+    {
+        public Guid Id { get; set; }
+
+        [Encrypted]
+        public string ParentCode { get; set; } = null!;
+
+        public Parent Parent { get; set; } = null!;
+    }
+
+    public class ForeignKeyCtx : DbContext
+    {
+        public ForeignKeyCtx(DbContextOptions opt) : base(opt) { }
+
+        public DbSet<Parent> Parents => Set<Parent>();
+
+        public DbSet<Child> Children => Set<Child>();
+
+        protected override void OnModelCreating(ModelBuilder modelBuilder)
+        {
+            ArgumentNullException.ThrowIfNull(modelBuilder);
+            modelBuilder.Entity<Parent>().HasAlternateKey(p => p.Code);
+            modelBuilder.Entity<Child>()
+                .HasOne(c => c.Parent)
+                .WithMany()
+                .HasForeignKey(c => c.ParentCode)
+                .HasPrincipalKey(p => p.Code);
+        }
+    }
+
+    /// <summary>An encrypted foreign key joins to nothing, so the relationship is refused too.</summary>
+    [Fact]
+    public void An_encrypted_foreign_key_is_refused_at_model_build()
+    {
+        using var sp = BuildHost<ForeignKeyCtx>();
+
+        BuildModel<ForeignKeyCtx>(sp).Should().Throw<OrionVaultConfigurationException>()
+            .WithMessage("*Child.ParentCode*")
+            .And.Message.Should().Contain("foreign key");
+    }
+
+    public class Versioned
+    {
+        public Guid Id { get; set; }
+
+        [ConcurrencyCheck]
+        [Encrypted]
+        public string Token { get; set; } = null!;
+    }
+
+    public class ConcurrencyCtx : DbContext
+    {
+        public ConcurrencyCtx(DbContextOptions opt) : base(opt) { }
+
+        public DbSet<Versioned> Rows => Set<Versioned>();
+    }
+
+    /// <summary>
+    /// A concurrency token is sent back as a WHERE predicate on update. Re-encrypting it produces a
+    /// value that matches no row, so every update would fail as a phantom concurrency conflict.
+    /// </summary>
+    [Fact]
+    public void An_encrypted_concurrency_token_is_refused_at_model_build()
+    {
+        using var sp = BuildHost<ConcurrencyCtx>();
+
+        BuildModel<ConcurrencyCtx>(sp).Should().Throw<OrionVaultConfigurationException>()
+            .WithMessage("*Versioned.Token*")
+            .And.Message.Should().Contain("concurrency token");
+    }
 
     // ---------------------------------------------------------------------------------------
     // The widened facet.
