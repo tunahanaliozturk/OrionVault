@@ -24,6 +24,27 @@ All notable changes to OrionVault are recorded here. Format follows [Keep a Chan
   **zero rows with no error**: a "find every user at this domain" screen renders empty, and a
   GDPR-erasure `Where(…).ExecuteDelete()` deletes nothing and reports success. The analyzer now
   inspects the instance and every argument of any invocation inside the predicate lambda.
+
+  **Breaking for a build.** The severity moved from `Warning` to `Error` because the diagnostic
+  describes a predicate that is false for every row, which has no intentional version; a
+  consumer with `TreatWarningsAsErrors` already got an error today. Suppress with
+  `<NoWarn>OV0002</NoWarn>` or `#pragma warning disable OV0002` if you have a case we did not
+  anticipate. Two false-positive classes were removed first, because an error-severity rule must
+  not fire on working code:
+
+  - **A `null` operand is no longer flagged, in any syntax**: `col == null`,
+    `string.Equals(col, null)`, `object.Equals(col, null)`, `col.Equals(null)`, and
+    `ReferenceEquals(col, null)` are all the same null test. Providers translate them to `IS NULL`,
+    which is evaluated on the column rather than its contents and works correctly against
+    ciphertext. The exemption is keyed on the operand, so it holds however the comparison is
+    written and whichever side the column is on.
+  - `System.Linq.Enumerable` operators are no longer matched, only `System.Linq.Queryable`. Once
+    rows are materialised the value converter has already decrypted the column, so an in-memory
+    comparison is over plaintext and is correct.
+
+  `OV0003` (ordering/grouping executes client-side) stays `Info`: it is a performance note, not
+  a wrong answer.
+
 - **BREAKING: an encrypted property that is a key, a foreign key, a concurrency token, or covered by
   a unique index is now refused at model build.** `EncryptionConfigurator` never inspected any of
   those roles, and all four fail silently: AES-GCM draws a fresh nonce per write, so the stored
@@ -46,25 +67,15 @@ All notable changes to OrionVault are recorded here. Format follows [Keep a Chan
   the consumer left unbounded stays unbounded. The facet is widened rather than cleared so the
   column stays bounded and the consumer's size budget stays legible.
 
-  **Breaking for a build.** The severity moved from `Warning` to `Error` because the diagnostic
-  describes a predicate that is false for every row, which has no intentional version; a
-  consumer with `TreatWarningsAsErrors` already got an error today. Suppress with
-  `<NoWarn>OV0002</NoWarn>` or `#pragma warning disable OV0002` if you have a case we did not
-  anticipate. Two false-positive classes were removed first, because an error-severity rule must
-  not fire on working code:
-
-  - **A `null` operand is no longer flagged, in any syntax**: `col == null`,
-    `string.Equals(col, null)`, `object.Equals(col, null)`, `col.Equals(null)`, and
-    `ReferenceEquals(col, null)` are all the same null test. Providers translate them to `IS NULL`,
-    which is evaluated on the column rather than its contents and works correctly against
-    ciphertext. The exemption is keyed on the operand, so it holds however the comparison is
-    written and whichever side the column is on.
-  - `System.Linq.Enumerable` operators are no longer matched, only `System.Linq.Queryable`. Once
-    rows are materialised the value converter has already decrypted the column, so an in-memory
-    comparison is over plaintext and is correct.
-
-  `OV0003` (ordering/grouping executes client-side) stays `Info`: it is a performance note, not
-  a wrong answer.
+  **This changes the generated DDL, so an existing database needs a migration that widens every
+  encrypted column.** Until it is applied, a length-enforcing store keeps behaving as it did — which
+  the new container-backed suite now settles rather than guesses: SQL Server 2022 **rejects** the
+  write with error 2628 ("String or binary data would be truncated"), while MySQL 8.4 with
+  `sql_mode` cleared **silently truncates** it, storing 64 of the 70 bytes. A truncated envelope has
+  lost its AES-GCM tag and the tail of its ciphertext, so the row can never be decrypted with any
+  key: the plaintext is gone, and the only signal was a warning. Nothing at the ADO layer protects
+  you either — EF Core stamps `DbParameter.Size` from `MaxLength` while the value fits, but *widens*
+  the parameter to the store maximum when it overflows, leaving the decision entirely to the column.
 
 ### Fixed
 
