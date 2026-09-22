@@ -198,7 +198,7 @@ To actually retire key 1, re-encrypt existing rows by running them through `Save
 
 ## Searchable encrypted columns
 
-AES-GCM is randomized: encrypting the same plaintext twice produces different ciphertext. That means SQL `WHERE Email = @p` does not work against an encrypted column. The Roslyn analyzer warns about this at compile time (`OV0002`).
+AES-GCM is randomized: encrypting the same plaintext twice produces different ciphertext. That means SQL `WHERE Email = @p` does not work against an encrypted column. The Roslyn analyzer fails the build on this at compile time (`OV0002`), including the invocation shapes - `Contains`, `StartsWith`, `string.Equals`, `EF.Functions.Like`, `emails.Contains(u.Email)` - that look nothing like `==` but reach SQL the same way.
 
 v0.3.0 adds a first-class **blind index** for exactly this case. A blind index is a deterministic, keyed HMAC-SHA256 digest of a normalized value: equal plaintexts always produce equal indexes, the index cannot be reversed to the plaintext without the key, and the stored ciphertext stays randomized and non-deterministic. You store the index in a separate, non-encrypted `byte[]` column and query it with an equality predicate.
 
@@ -277,10 +277,12 @@ Three diagnostics ship inside the core nupkg's `analyzers/dotnet/cs/` directory.
 | Id      | Severity | Catches |
 |---------|----------|---------|
 | OV0001  | Error    | `[Encrypted]` on a property whose type is not `string` or `byte[]`. |
-| OV0002  | Warning  | LINQ `Where`/`==` comparison against an encrypted column (always returns false). |
+| OV0002  | Error    | LINQ predicate filtering on an encrypted column (matches no rows, reports success). |
 | OV0003  | Info     | LINQ `OrderBy` / `GroupBy` on an encrypted column (executes client-side after decryption). |
 
-Suppress per-call site with `#pragma warning disable OV0002` when you know what you are doing (for example, fetching a single row by primary key and filtering in memory).
+`OV0002` covers the invocation shapes as well as `==`: `col.Contains(x)`, `StartsWith`, `EndsWith`, `string.Equals(col, x)`, `EF.Functions.Like(col, ...)`, and `emails.Contains(col)`. It is deliberately **not** raised when an operand is `null` - `col == null`, `string.Equals(col, null)`, `object.Equals(col, null)`, `col.Equals(null)`, `ReferenceEquals(col, null)` - because those all translate to `IS NULL`, which is evaluated on the column rather than its contents and works correctly against ciphertext. Nor is it raised for in-memory `IEnumerable` queries, where the value converter has already decrypted the column.
+
+It is an error rather than a warning because the predicate is false for every row and fails silently: the screen renders empty, and a `Where(...).ExecuteDelete()` erasure deletes nothing and reports success. Suppress per-call site with `#pragma warning disable OV0002` when you know what you are doing (for example, fetching a single row by primary key and filtering in memory).
 
 ## Telemetry
 
