@@ -5,7 +5,7 @@ using Microsoft.EntityFrameworkCore.Infrastructure;
 using Moongazing.OrionVault.EntityFrameworkCore.Internal;
 
 /// <summary>
-/// Adds the bound key material to EF Core's compiled-model cache key, so two hosts of the SAME
+/// Adds the bound key provider to EF Core's compiled-model cache key, so two hosts of the SAME
 /// DbContext CLR type wired to DIFFERENT keys get different compiled models.
 /// </summary>
 /// <remarks>
@@ -19,8 +19,7 @@ using Moongazing.OrionVault.EntityFrameworkCore.Internal;
 /// <para>
 /// Wired automatically by <c>UseOrionVault(sp)</c>, <c>AddOrionVaultDbContext&lt;T&gt;</c> and
 /// <c>AddOrionVaultBoundDbContext&lt;T&gt;</c>. Wire it yourself alongside
-/// <see cref="KeyedOrionVaultModelCustomizer{TDbContext}"/> if you assemble the options by hand:
-/// <c>opt.ReplaceService&lt;IModelCacheKeyFactory, OrionVaultModelCacheKeyFactory&gt;()</c>.
+/// <see cref="KeyedOrionVaultModelCustomizer{TDbContext}"/> if you assemble the options by hand.
 /// </para>
 /// </remarks>
 public sealed class OrionVaultModelCacheKeyFactory : IModelCacheKeyFactory
@@ -29,6 +28,7 @@ public sealed class OrionVaultModelCacheKeyFactory : IModelCacheKeyFactory
     public object Create(DbContext context, bool designTime)
     {
         ArgumentNullException.ThrowIfNull(context);
-        return (context.GetType(), designTime, KeySetFingerprint.ForContext(context));
+
+        return (context.GetType(), designTime, KeyProviderIdentity.ForContext(context));
     }
 }

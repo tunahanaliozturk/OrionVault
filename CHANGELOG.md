@@ -116,14 +116,22 @@ All notable changes to OrionVault are recorded here. Format follows [Keep a Chan
 
   `UseOrionVault`, `AddOrionVaultDbContext<T>` and `AddOrionVaultBoundDbContext<T>` now also replace
   `IModelCacheKeyFactory` with the new public `OrionVaultModelCacheKeyFactory`, which adds the bound
-  key material to the cache key. If you assemble `DbContextOptions` by hand alongside
+  key provider to the cache key. If you assemble `DbContextOptions` by hand alongside
   `KeyedOrionVaultModelCustomizer<T>`, add
   `opt.ReplaceService<IModelCacheKeyFactory, OrionVaultModelCacheKeyFactory>()` — it is not optional.
 
-  The discriminator is a truncated SHA-256 digest over the key provider's type, its active key id,
-  its key count and the active key's bytes: stable across container rebuilds of the same
-  configuration (so the model is still compiled once), and different whenever the key material is.
-  It is one-way and truncated, and is only ever used as a dictionary key.
+  The discriminator is an opaque per-instance identity, minted on first use and held against the
+  provider in a `ConditionalWeakTable`. Two distinct provider instances can never collide, whatever
+  their configuration. It deliberately does **not** fingerprint the key material: digesting the
+  provider type, active key id, key count and active key bytes would have let two containers built
+  from one configuration share a compiled model, but it also meant two providers agreeing on all of
+  those while differing in a **legacy** key shared one — and that is the rotation / cutover shape,
+  where tenants most plausibly agree on the active key and differ below it, so the cross-tenant leak
+  stayed open on exactly the path this replacement exists to close. Fingerprinting the whole key set
+  is not available (`IKeyProvider.TryGetKey` is a lookup with no enumeration, and probing the 16-bit
+  id space would be a network call per id against a KMS), so the identity is per instance instead.
+  The cost is one compiled model per provider instance rather than per distinct key set; every
+  `IKeyProvider` OrionVault registers is a container singleton, so that is one model per container.
 
 ### Security
 
