@@ -26,8 +26,16 @@ using Moongazing.OrionVault.Abstractions;
 ///     opt.UseSqlServer(connectionString);
 ///     opt.UseApplicationServiceProvider(sp);
 ///     opt.ReplaceService&lt;IModelCustomizer, KeyedOrionVaultModelCustomizer&lt;PrimaryDb&gt;&gt;();
+///     opt.ReplaceService&lt;IModelCacheKeyFactory, OrionVaultModelCacheKeyFactory&gt;();
 /// });
 /// </code>
+/// <para>
+/// The <see cref="OrionVaultModelCacheKeyFactory"/> line is NOT optional. The converters this
+/// customizer attaches capture one encryptor, EF Core's compiled-model cache is process-wide, and
+/// its default key is the DbContext CLR type alone - so without the replacement a second host of the
+/// same context type, bound to different keys, reuses the first host's model and reads its plaintext.
+/// <c>AddOrionVaultBoundDbContext</c> wires both for you.
+/// </para>
 /// <para>
 /// The customizer has a parameterless ctor (so EF Core's internal SP can construct it via
 /// <see cref="DbContextOptionsBuilder.ReplaceService{TService,TImplementation}"/>); its
@@ -80,6 +88,8 @@ public sealed class KeyedOrionVaultModelCustomizer<TDbContext> : IModelCustomize
             ?? throw new InvalidOperationException(
                 "KeyedOrionVaultModelCustomizer requires UseApplicationServiceProvider on the " +
                 "DbContextOptionsBuilder so the application's keyed services are visible.");
+
+        OrionVaultModelCacheKeyFactory.EnsureActive(context);
 
         var binding = applicationSp.GetRequiredService<KeyedOrionVaultBinding<TDbContext>>();
         var configurator = applicationSp.GetRequiredKeyedService<IEncryptionConfigurator>(binding.ProviderName);

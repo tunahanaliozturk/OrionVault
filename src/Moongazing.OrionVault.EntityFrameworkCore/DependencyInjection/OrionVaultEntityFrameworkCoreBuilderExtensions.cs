@@ -102,7 +102,50 @@ public static class OrionVaultEntityFrameworkCoreBuilderExtensions
         // bind an instance whose ctor cannot satisfy its IEncryptionConfigurator parameter.
         builder.UseApplicationServiceProvider(serviceProvider);
         builder.ReplaceService<IModelCustomizer, OrionVaultModelCustomizer>();
+        // The converters this customizer attaches capture ONE encryptor, and EF Core's compiled-model
+        // cache is process-wide and keyed on the DbContext type alone. Without this replacement a
+        // second host of the same context type - a second tenant, a different key set - reuses the
+        // first host's model and therefore its encryptor.
+        ReplaceModelCacheKeyFactory(builder);
         return builder;
+    }
+
+    /// <summary>
+    /// Swaps in <see cref="OrionVaultModelCacheKeyFactory"/> while PRESERVING any
+    /// <see cref="IModelCacheKeyFactory"/> the caller had already replaced.
+    /// </summary>
+    /// <remarks>
+    /// <c>ReplaceService</c> keys its replacements on the service type alone, so calling it twice
+    /// for <see cref="IModelCacheKeyFactory"/> silently drops the first implementation - it is gone
+    /// from <c>ReplacedServices</c> and from the built container alike. An application that
+    /// discriminates its model on its own dimension (schema-per-tenant, most often) would lose it
+    /// and start serving one tenant's model to another. So the caller's type is read off the options
+    /// first and carried on <see cref="OrionVaultOptionsExtension"/> for the new factory to compose
+    /// with.
+    /// </remarks>
+    private static void ReplaceModelCacheKeyFactory(DbContextOptionsBuilder builder)
+    {
+        var alreadyReplaced = builder.Options
+            .FindExtension<Microsoft.EntityFrameworkCore.Infrastructure.CoreOptionsExtension>()
+            ?.ReplacedServices;
+
+        Type? inner = null;
+        if (alreadyReplaced is not null)
+        {
+            foreach (var replacement in alreadyReplaced)
+            {
+                if (replacement.Key.Item1 == typeof(IModelCacheKeyFactory)
+                    && replacement.Value != typeof(OrionVaultModelCacheKeyFactory))
+                {
+                    inner = replacement.Value;
+                    break;
+                }
+            }
+        }
+
+        ((IDbContextOptionsBuilderInfrastructure)builder)
+            .AddOrUpdateExtension(new OrionVaultOptionsExtension(inner));
+        builder.ReplaceService<IModelCacheKeyFactory, OrionVaultModelCacheKeyFactory>();
     }
 
     /// <summary>
@@ -154,6 +197,11 @@ public static class OrionVaultEntityFrameworkCoreBuilderExtensions
                 opt.UseApplicationServiceProvider(sp);
                 opt.ReplaceService<Microsoft.EntityFrameworkCore.Infrastructure.IModelCustomizer,
                     KeyedOrionVaultModelCustomizer<TDbContext>>();
+                // Same reason as UseOrionVault: the keyed configurator's converters capture the named
+                // provider's encryptor, so the compiled model must be keyed on that provider too.
+                // configureContext ran first, so a caller's own factory is already on the options here
+                // and is captured rather than dropped.
+                ReplaceModelCacheKeyFactory(opt);
             },
             contextLifetime,
             optionsLifetime);

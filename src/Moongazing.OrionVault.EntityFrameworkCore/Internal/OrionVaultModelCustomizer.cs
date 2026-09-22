@@ -32,6 +32,10 @@ internal sealed class OrionVaultModelCustomizer : IModelCustomizer
 
         _inner.Customize(modelBuilder, context);
 
+        // UseOrionVault replaced IModelCacheKeyFactory too; refuse to build a model whose cache key
+        // no longer carries the bound key provider (see OrionVaultModelCacheKeyFactory.EnsureActive).
+        OrionVaultModelCacheKeyFactory.EnsureActive(context);
+
         var configurator = context.GetService<IEncryptionConfigurator>();
         configurator.Configure(modelBuilder);
     }

@@ -45,6 +45,38 @@ All notable changes to OrionVault are recorded here. Format follows [Keep a Chan
   `OV0003` (ordering/grouping executes client-side) stays `Info`: it is a performance note, not
   a wrong answer.
 
+- **BREAKING: an encrypted property that is a key, a foreign key, a concurrency token, or covered by
+  a unique index is now refused at model build.** `EncryptionConfigurator` never inspected any of
+  those roles, and all four fail silently: AES-GCM draws a fresh nonce per write, so the stored
+  ciphertext differs every time the same plaintext is saved. A `.IsUnique()` index over an encrypted
+  column accepts duplicates, an encrypted key or foreign key makes `Find()` and every join miss, and
+  an encrypted concurrency token turns every update into a phantom conflict. The model now fails to
+  build with an `OrionVaultConfigurationException` naming the property, saying which role it cannot
+  fill, and pointing at the blind index (`options.UseBlindIndex(...)` / `IBlindIndexProvider`), which
+  IS deterministic and can legitimately carry a unique index over the plaintext.
+
+  **A model that has such a property today stops building.** That is the point: it was never
+  enforcing what it looked like it enforced.
+
+- **BREAKING: `MaxLength` on an encrypted column is now widened to fit the encryption envelope.**
+  `EncryptionConfigurator` attached the value converter but never touched the length facet, so a
+  `[Encrypted] [MaxLength(64)]` string still declared a 64-wide column while the AES-GCM envelope
+  adds a fixed 30 bytes on top of the UTF-8 plaintext. The declared length is now
+  `30 + Encoding.UTF8.GetMaxByteCount(n)` for a string facet (a `MaxLength` on a string counts
+  characters, and a character is up to three UTF-8 bytes) and `30 + n` for a `byte[]` facet. A column
+  the consumer left unbounded stays unbounded. The facet is widened rather than cleared so the
+  column stays bounded and the consumer's size budget stays legible.
+
+  **This changes the generated DDL, so an existing database needs a migration that widens every
+  encrypted column.** Until it is applied, a length-enforcing store keeps behaving as it did — which
+  the new container-backed suite now settles rather than guesses: SQL Server 2022 **rejects** the
+  write with error 2628 ("String or binary data would be truncated"), while MySQL 8.4 with
+  `sql_mode` cleared **silently truncates** it, storing 64 of the 70 bytes. A truncated envelope has
+  lost its AES-GCM tag and the tail of its ciphertext, so the row can never be decrypted with any
+  key: the plaintext is gone, and the only signal was a warning. Nothing at the ADO layer protects
+  you either — EF Core stamps `DbParameter.Size` from `MaxLength` while the value fits, but *widens*
+  the parameter to the store maximum when it overflows, leaving the decision entirely to the column.
+
 ### Fixed
 
 - **The Cloud KMS and Key Vault live suites report as skipped instead of passing vacuously.**
@@ -73,6 +105,62 @@ All notable changes to OrionVault are recorded here. Format follows [Keep a Chan
   provider lifetime" with no mention of a refresh path, and their DI extension remarks documented
   only the blocking startup unwrap. Both now describe the opt-in envelope-key cache alongside it,
   matching the GCP wording. The AWS README documents the required `KeyId` and why it is required.
+- **The container-suite Docker probe asked whether `DOCKER_HOST` was SET, not whether anything
+  answered there.** A CI agent carrying inherited remote-Docker configuration reported "available"
+  and ran every container test against an endpoint that was not there, so they failed instead of
+  skipping. The probe now pings the daemon, trying `DOCKER_HOST` and then the platform default —
+  the same order Testcontainers resolves, which takes the first endpoint that answers — with a
+  bounded timeout, and reports unavailable if neither does. It also replaces a Windows check that
+  was wrong the other way: `Directory.Exists(@"\\.\pipe")` is false even with Docker Desktop
+  running (the named-pipe filesystem only answers an enumeration of `\\.\pipe\`), which skipped
+  the whole suite on a machine that could have run it. The probe now has its own test.
+- **Two hosts of the same DbContext type with different keys could read each other's data.**
+  OrionVault's value converters capture one `IEncryptor` by closure, and the converters live on the
+  compiled model. EF Core's compiled-model cache is process-wide and its default key is the DbContext
+  CLR type alone, and OrionVault shipped no replacement — so whichever host built the model first lent
+  its encryptor to every later host of the same context type. A second tenant, wired to completely
+  different key material, decrypted the first tenant's ciphertext and got its plaintext back. Any
+  deployment that resolves more than one key set over one DbContext type — per-tenant keys, a
+  key-rotation cutover host, a test suite that builds several hosts — was exposed.
+
+  `UseOrionVault`, `AddOrionVaultDbContext<T>` and `AddOrionVaultBoundDbContext<T>` now also replace
+  `IModelCacheKeyFactory` with the new public `OrionVaultModelCacheKeyFactory`, which adds the bound
+  key provider to the cache key. If you assemble `DbContextOptions` by hand alongside
+  `KeyedOrionVaultModelCustomizer<T>`, add
+  `opt.ReplaceService<IModelCacheKeyFactory, OrionVaultModelCacheKeyFactory>()` — it is not optional,
+  and the customizer now refuses to build the model without it rather than leak silently.
+
+  The discriminator is an opaque per-instance identity, minted on first use and held against the
+  provider in a `ConditionalWeakTable`. Two distinct provider instances can never collide, whatever
+  their configuration. It deliberately does **not** fingerprint the key material: digesting the
+  provider type, active key id, key count and active key bytes would have let two containers built
+  from one configuration share a compiled model, but it also meant two providers agreeing on all of
+  those while differing in a **legacy** key shared one — and that is the rotation / cutover shape,
+  where tenants most plausibly agree on the active key and differ below it, so the cross-tenant leak
+  stayed open on exactly the path this replacement exists to close. Fingerprinting the whole key set
+  is not available (`IKeyProvider.TryGetKey` is a lookup with no enumeration, and probing the 16-bit
+  id space would be a network call per id against a KMS), so the identity is per instance instead.
+  The cost is one compiled model per provider instance rather than per distinct key set; every
+  `IKeyProvider` OrionVault registers is a container singleton, so that is one model per container.
+
+- **`UseOrionVault` no longer silently discards an `IModelCacheKeyFactory` the application had
+  already replaced.** `ReplaceService` keys its replacements on the service type alone, so a second
+  call for the same service overwrites the first and the earlier implementation is gone from the
+  options and from the built container alike. An application that discriminates its model on its own
+  dimension — schema- or table-per-tenant, the usual reason, and the same audience as this library —
+  lost it, and two contexts with identical keys but different model variants shared the first
+  model and queried the wrong schema. `AddOrionVaultDbContext<T>` made it unavoidable because it
+  applies the replacement after the caller's configuration callback.
+
+  OrionVault now captures the caller's factory before overwriting it and composes: the cache key is
+  a pair of whatever the inner factory produced and OrionVault's key-provider identity, so both
+  dimensions survive. The inner factory is EF Core's default when the application replaced nothing.
+
+  **Call `UseOrionVault` after your own `ReplaceService` calls.** Composition can only capture a
+  factory that is already on the options; a `ReplaceService<IModelCacheKeyFactory, …>` made
+  afterwards overwrites OrionVault's, and the options keep no record of it. That case is now a
+  refusal to build the model, with a message naming the displacing factory and the required order,
+  rather than a silent loss of the key discrimination.
 
 ### Security
 
@@ -212,9 +300,7 @@ It does **not** mean zero work was done. A cycle can rotate rows and then fail, 
   | Provider | Revocation (fails closed) | Transient (serve-stale eligible) |
   | --- | --- | --- |
   | AWS KMS | `KMSInvalidStateException`, `DisabledException`, `NotFoundException`, `InvalidCiphertextException`, `IncorrectKeyException`, `AccessDenied` / HTTP 403 | `LimitExceededException`, `KMSInternalException`, `DependencyTimeoutException`, 429, 5xx |
-  | Azure Key Vault | `RequestFailedException` 403, 404, 409 | 429, 5xx |
-
-## [0.5.0] - 2026-07-28
+  | Azure Key Vault | `RequestFailedException` 403, 404, 409 | 429, 5xx |## [0.5.0] - 2026-07-28
 
 ### Changed
 

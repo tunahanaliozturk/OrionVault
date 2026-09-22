@@ -77,6 +77,12 @@ public sealed class KeyedOrionVaultModelCustomizerTests
             opt.UseApplicationServiceProvider(sp);
             opt.ReplaceService<Microsoft.EntityFrameworkCore.Infrastructure.IModelCustomizer,
                 KeyedOrionVaultModelCustomizer<PrimaryDb>>();
+            // Hand-assembled options must replace the model cache key factory too, or the compiled
+            // model is not keyed on the bound provider and a second host of this context type with
+            // different keys would reuse this one's encryptor. The customizer refuses to build
+            // without it.
+            opt.ReplaceService<Microsoft.EntityFrameworkCore.Infrastructure.IModelCacheKeyFactory,
+                OrionVaultModelCacheKeyFactory>();
         });
         services.AddDbContext<AuditDb>((sp, opt) =>
         {
@@ -84,6 +90,12 @@ public sealed class KeyedOrionVaultModelCustomizerTests
             opt.UseApplicationServiceProvider(sp);
             opt.ReplaceService<Microsoft.EntityFrameworkCore.Infrastructure.IModelCustomizer,
                 KeyedOrionVaultModelCustomizer<AuditDb>>();
+            // Hand-assembled options must replace the model cache key factory too, or the compiled
+            // model is not keyed on the bound provider and a second host of this context type with
+            // different keys would reuse this one's encryptor. The customizer refuses to build
+            // without it.
+            opt.ReplaceService<Microsoft.EntityFrameworkCore.Infrastructure.IModelCacheKeyFactory,
+                OrionVaultModelCacheKeyFactory>();
         });
 
         await using var sp = services.BuildServiceProvider();
