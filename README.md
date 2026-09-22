@@ -84,7 +84,7 @@ flowchart LR
 |---------|-------------|
 | `OrionVault` | Core: `IEncryptor`, `IKeyProvider`, `IEncryptionConfigurator`, AES-256-GCM cipher, static key provider, searchable blind index (`IBlindIndexProvider`), telemetry. Bundles the Roslyn analyzer (`analyzers/dotnet/cs/`). |
 | `OrionVault.EntityFrameworkCore` | EF Core integration: `[Encrypted]` attribute, `IsEncrypted()` fluent API, value converter factory, `IModelCustomizer` wiring, `UseOrionVault()` extension. |
-| `OrionVault.Testing` | Test helpers: `AddOrionVaultForTesting()` DI extension, deterministic `TestKeyProvider`, `PlaintextEncryptor` for raw-layout tests, `EncryptionAssertions`. |
+| `OrionVault.Testing` | Test helpers: `AddOrionVaultForTesting()` DI extension, `DangerousTestKeyProvider` (zero key, explicit opt-in required), `EncryptionAssertions`. Reference it with `PrivateAssets="all"`. |
 | `OrionVault.AwsKms` _(in repo, not yet on NuGet)_ | AWS KMS `IKeyProvider` — unwraps data keys from AWS Key Management Service. |
 | `OrionVault.AzureKeyVault` _(in repo, not yet on NuGet)_ | Azure Key Vault `IKeyProvider` — unwraps data keys from Azure Key Vault. |
 | `OrionVault.GcpKms` _(in repo, not yet on NuGet)_ | Google Cloud KMS `IKeyProvider` — unwraps data keys from GCP Key Management. |
@@ -307,7 +307,25 @@ See [benchmarks.md](benchmarks.md) for the scenarios we measure (encrypt and dec
 
 ## Testing
 
-The `Moongazing.OrionVault.Testing` package wires a deterministic key provider and the real AES-GCM encryptor for fast unit tests:
+The `Moongazing.OrionVault.Testing` package wires a deterministic key provider and the real AES-GCM encryptor for fast unit tests. Reference it with `PrivateAssets="all"`, and opt in once - the key it serves is 32 zero bytes, so the provider refuses to construct until a process says out loud that it is a test process:
+
+```xml
+<PackageReference Include="OrionVault.Testing" Version="..." PrivateAssets="all" />
+```
+
+```csharp
+using System.Runtime.CompilerServices;
+using Moongazing.OrionVault.Testing;
+
+internal static class TestSetup
+{
+    // Runs before the first test in the assembly.
+    [ModuleInitializer]
+    internal static void Enable() => DangerousTestKeyProvider.Enable();
+}
+```
+
+Then the wiring is ordinary:
 
 ```csharp
 using Moongazing.OrionVault.Testing.DependencyInjection;
@@ -331,7 +349,13 @@ EncryptionAssertions.IsEncrypted(raw);
 EncryptionAssertions.IsEncryptedWithKey(raw, expectedKeyId: 1);
 ```
 
-If you want to bypass real cryptography in a test that is asserting wiring rather than crypto, register `PlaintextEncryptor` instead and read the header bytes directly.
+`OrionVault.Testing` is test-only and says so in three places, because a test double that reaches production is indistinguishable from no encryption at all:
+
+- Reference it with `PrivateAssets="all"` so it cannot flow into a dependent's build.
+- `DangerousTestKeyProvider` serves an all-zero AES key and refuses to construct until the process opts in - call `DangerousTestKeyProvider.Enable()` from test setup (a `[ModuleInitializer]` works well) or set the `Moongazing.OrionVault.Testing.EnableDangerousTestKeys` AppContext switch in the test project.
+- Using it raises `OV9000`, which you must suppress explicitly.
+
+The package ships no fake `IEncryptor`. Tests that need to inspect the envelope layout read it with `EncryptionAssertions` against real ciphertext instead.
 
 ## Veil vs OrionVault
 

@@ -6,6 +6,46 @@ All notable changes to OrionVault are recorded here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+### Security
+
+- **`OrionVault.Testing` no longer ships an encryptor that writes plaintext, and its zero-key
+  provider refuses to run without an explicit opt-in.** Both types were public API on nuget.org
+  since 0.1.0. `PlaintextEncryptor` wrote the plaintext body behind a valid-looking 30-byte
+  envelope with an all-zero tag that `DecryptBytes` never verified; `TestKeyProvider.Default`
+  handed out an all-zero AES key. A `services.AddSingleton<IEncryptor, PlaintextEncryptor>()`
+  left in a shared composition root - or a `Testing` PackageReference without `PrivateAssets`
+  reaching a Release build - wrote every `[Encrypted]` column as a well-formed envelope whose
+  body was plaintext, and nothing detected it.
+
+  **Breaking.** Migration:
+
+  | Before | After |
+  | --- | --- |
+  | `PlaintextEncryptor` | **Removed, not repaired.** See below. |
+  | `TestKeyProvider` | `DangerousTestKeyProvider` |
+  | `TestKeyProvider.Default` | `DangerousTestKeyProvider.Default` |
+
+  **Why `PlaintextEncryptor` was deleted rather than repaired.** Verifying the tag it wrote would
+  have made it a *correct* fake, and a correct fake is still a type on nuget.org whose entire job
+  is to write plaintext into columns the consumer marked `[Encrypted]`. That does not belong in a
+  published package at any level of quality: the hazard is its existence on the restore graph, not
+  a defect in it. Nothing in this repository used it, and `EncryptionAssertions.IsNotEncrypted`
+  already carried a remark telling callers not to. If you genuinely need a no-op `IEncryptor`,
+  declare it in your own test project, where it cannot be restored into a shipped build. To
+  inspect the envelope layout - its one documented purpose - use `EncryptionAssertions` against
+  real ciphertext instead.
+
+  `DangerousTestKeyProvider` now throws `InvalidOperationException` on construction unless the
+  process opts in - call `DangerousTestKeyProvider.Enable()` from test setup (a
+  `[ModuleInitializer]` works well), or set the
+  `Moongazing.OrionVault.Testing.EnableDangerousTestKeys` AppContext switch from the test
+  project. `AddOrionVaultForTesting()` uses that provider, so it needs the same opt-in. The type
+  also carries `[Obsolete]` under diagnostic id **`OV9000`**, so using it requires an explicit
+  `<NoWarn>OV9000</NoWarn>` or `#pragma warning disable OV9000` rather than sliding past a
+  generic `CS0618` a project may already suppress wholesale.
+
+  Reference `OrionVault.Testing` with `PrivateAssets="all"`.
+
 ## [0.5.0] - 2026-07-28
 
 ### Changed

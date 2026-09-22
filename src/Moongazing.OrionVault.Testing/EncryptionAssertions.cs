@@ -71,10 +71,9 @@ public static class EncryptionAssertions
     /// fast-path (column shorter than the minimum ciphertext layout) by returning early.
     /// <para>
     /// IMPORTANT: pass the <see cref="IEncryptor"/> registered by <c>AddOrionVault(...)</c>
-    /// (real AES-GCM crypto). Do NOT use the <c>PlaintextEncryptor</c> stub from the testing
-    /// package: that stub is a no-op designed for ciphertext-layout inspection and returns
-    /// success for any input shaped like a ciphertext header, which would re-introduce the
-    /// length-based false positive this overload was specifically designed to eliminate.
+    /// (real AES-GCM crypto). A no-op stub that returns success for any input shaped like a
+    /// ciphertext header would re-introduce the length-based false positive this overload was
+    /// specifically designed to eliminate - which is why the testing package no longer ships one.
     /// </para>
     /// </remarks>
     public static void IsNotEncrypted(byte[] columnValue, IEncryptor encryptor)
