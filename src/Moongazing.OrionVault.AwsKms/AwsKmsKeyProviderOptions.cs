@@ -10,6 +10,25 @@ namespace Moongazing.OrionVault.AwsKms;
 public sealed class AwsKmsKeyProviderOptions
 {
     /// <summary>
+    /// The customer master key (CMK) every configured blob must be wrapped under: a key id,
+    /// key ARN, alias name (<c>alias/orionvault</c>) or alias ARN. REQUIRED.
+    /// <para>
+    /// This value is passed as <c>DecryptRequest.KeyId</c> so KMS decrypts under the CMK the
+    /// deployment declares instead of resolving one from the ciphertext blob's own metadata.
+    /// Without it, anyone who can influence <see cref="WrappedKeys"/> - a config store, an
+    /// environment variable, an <c>appsettings.json</c> baked into a container image, a
+    /// compromised deploy pipeline - can substitute a blob they wrapped under a CMK in their
+    /// own account that the host principal happens to hold <c>kms:Decrypt</c> on (reachable via
+    /// cross-account key policies or a <c>Resource: "*"</c> grant). KMS would resolve that key
+    /// from the blob and decrypt it happily, making the attacker's data key the active key. Byte
+    /// length is the only other thing the provider can check, and a 32-byte attacker key passes
+    /// it. Pinning the CMK is AWS's documented practice for symmetric decrypt for exactly this
+    /// reason.
+    /// </para>
+    /// </summary>
+    public string KeyId { get; set; } = string.Empty;
+
+    /// <summary>
     /// Key id used for all new encryptions. Must appear as a key in <see cref="WrappedKeys"/>.
     /// </summary>
     public short ActiveKeyId { get; set; }

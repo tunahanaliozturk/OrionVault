@@ -12,6 +12,8 @@ using Xunit;
 
 public sealed class AwsKmsKeyProviderTests
 {
+    private const string Cmk = "arn:aws:kms:us-east-1:111122223333:key/abcd1234-ab12-cd34-ef56-abcdef123456";
+
     private static byte[] Key32(byte fill)
     {
         var bytes = new byte[32];
@@ -69,7 +71,7 @@ public sealed class AwsKmsKeyProviderTests
         kms.Setup(x => x.DecryptAsync(It.Is<DecryptRequest>(r => ReadAsAscii(r.CiphertextBlob) == "ct2"), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new DecryptResponse { Plaintext = new MemoryStream(key2) });
 
-        var opts = new AwsKmsKeyProviderOptions { ActiveKeyId = 1 };
+        var opts = new AwsKmsKeyProviderOptions { KeyId = Cmk, ActiveKeyId = 1 };
         opts.WrappedKeys[1] = Convert.ToBase64String(Encoding.ASCII.GetBytes("ct1"));
         opts.WrappedKeys[2] = Convert.ToBase64String(Encoding.ASCII.GetBytes("ct2"));
 
@@ -82,10 +84,59 @@ public sealed class AwsKmsKeyProviderTests
     }
 
     [Fact]
-    public async Task CreateAsync_throws_when_WrappedKeys_is_empty()
+    public async Task CreateAsync_pins_every_decrypt_to_the_configured_CMK()
+    {
+        // Without DecryptRequest.KeyId, KMS resolves the key from the ciphertext blob itself, so a
+        // blob substituted into WrappedKeys decrypts under whatever CMK wrapped it. Every request
+        // must carry the configured CMK.
+        var kms = new Mock<IAmazonKeyManagementService>();
+        kms.Setup(x => x.DecryptAsync(It.IsAny<DecryptRequest>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new DecryptResponse { Plaintext = new MemoryStream(Key32(0x11)) });
+
+        var opts = new AwsKmsKeyProviderOptions { KeyId = Cmk, ActiveKeyId = 1 };
+        opts.WrappedKeys[1] = Convert.ToBase64String(Encoding.ASCII.GetBytes("ct1"));
+        opts.WrappedKeys[2] = Convert.ToBase64String(Encoding.ASCII.GetBytes("ct2"));
+
+        await AwsKmsKeyProvider.CreateAsync(kms.Object, opts);
+
+        kms.Verify(
+            x => x.DecryptAsync(It.Is<DecryptRequest>(r => r.KeyId == Cmk), It.IsAny<CancellationToken>()),
+            Times.Exactly(2));
+        kms.Verify(
+            x => x.DecryptAsync(It.Is<DecryptRequest>(r => string.IsNullOrEmpty(r.KeyId)), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task CreateAsync_throws_when_KeyId_is_missing()
     {
         var kms = new Mock<IAmazonKeyManagementService>();
         var opts = new AwsKmsKeyProviderOptions { ActiveKeyId = 1 };
+        opts.WrappedKeys[1] = Convert.ToBase64String(Encoding.ASCII.GetBytes("ct1"));
+
+        var ex = await Assert.ThrowsAsync<OrionVaultConfigurationException>(
+            () => AwsKmsKeyProvider.CreateAsync(kms.Object, opts));
+        Assert.Contains("KeyId", ex.Message, StringComparison.Ordinal);
+        kms.Verify(x => x.DecryptAsync(It.IsAny<DecryptRequest>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task CreateAsync_throws_when_KeyId_is_whitespace()
+    {
+        var kms = new Mock<IAmazonKeyManagementService>();
+        var opts = new AwsKmsKeyProviderOptions { KeyId = "   ", ActiveKeyId = 1 };
+        opts.WrappedKeys[1] = Convert.ToBase64String(Encoding.ASCII.GetBytes("ct1"));
+
+        var ex = await Assert.ThrowsAsync<OrionVaultConfigurationException>(
+            () => AwsKmsKeyProvider.CreateAsync(kms.Object, opts));
+        Assert.Contains("KeyId", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task CreateAsync_throws_when_WrappedKeys_is_empty()
+    {
+        var kms = new Mock<IAmazonKeyManagementService>();
+        var opts = new AwsKmsKeyProviderOptions { KeyId = Cmk, ActiveKeyId = 1 };
 
         await Assert.ThrowsAsync<OrionVaultConfigurationException>(
             () => AwsKmsKeyProvider.CreateAsync(kms.Object, opts));
@@ -95,7 +146,7 @@ public sealed class AwsKmsKeyProviderTests
     public async Task CreateAsync_throws_when_ciphertext_is_not_base64()
     {
         var kms = new Mock<IAmazonKeyManagementService>();
-        var opts = new AwsKmsKeyProviderOptions { ActiveKeyId = 1 };
+        var opts = new AwsKmsKeyProviderOptions { KeyId = Cmk, ActiveKeyId = 1 };
         opts.WrappedKeys[1] = "not-base64-!!";
 
         var ex = await Assert.ThrowsAsync<OrionVaultConfigurationException>(
@@ -107,7 +158,7 @@ public sealed class AwsKmsKeyProviderTests
     public async Task CreateAsync_throws_when_ciphertext_is_whitespace()
     {
         var kms = new Mock<IAmazonKeyManagementService>();
-        var opts = new AwsKmsKeyProviderOptions { ActiveKeyId = 1 };
+        var opts = new AwsKmsKeyProviderOptions { KeyId = Cmk, ActiveKeyId = 1 };
         opts.WrappedKeys[1] = "   ";
 
         await Assert.ThrowsAsync<OrionVaultConfigurationException>(
@@ -118,7 +169,7 @@ public sealed class AwsKmsKeyProviderTests
     public async Task CreateAsync_throws_when_decoded_ciphertext_is_zero_bytes()
     {
         var kms = new Mock<IAmazonKeyManagementService>();
-        var opts = new AwsKmsKeyProviderOptions { ActiveKeyId = 1 };
+        var opts = new AwsKmsKeyProviderOptions { KeyId = Cmk, ActiveKeyId = 1 };
         // Empty-string base64 decodes to zero bytes, so the KMS call would fail; we reject
         // it deterministically at startup before invoking the SDK.
         opts.WrappedKeys[1] = Convert.ToBase64String(Array.Empty<byte>());

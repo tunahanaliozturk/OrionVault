@@ -18,6 +18,11 @@ using Moongazing.OrionVault.Exceptions;
 /// under them are re-encrypted by the v0.2.0 background re-encryption service. Each entry's
 /// plaintext is held in memory once and reused; consumers MUST register the provider as
 /// singleton (the default <c>AddOrionVaultAwsKms</c> extension enforces this).
+/// <para>
+/// Every decrypt is pinned to <see cref="AwsKmsKeyProviderOptions.KeyId"/>, so a substituted
+/// ciphertext blob wrapped under some other CMK is rejected by KMS instead of silently
+/// becoming the active data key.
+/// </para>
 /// </remarks>
 public sealed class AwsKmsKeyProvider : IKeyProvider
 {
@@ -69,12 +74,38 @@ public sealed class AwsKmsKeyProvider : IKeyProvider
     {
         ArgumentNullException.ThrowIfNull(kms);
         ArgumentNullException.ThrowIfNull(options);
+
+        var unwrapped = await UnwrapAllAsync(kms, options, cancellationToken).ConfigureAwait(false);
+        var map = unwrapped.ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
+        return new AwsKmsKeyProvider(options.ActiveKeyId, map);
+    }
+
+    /// <summary>
+    /// Decodes and decrypts every configured ciphertext entry against the validated
+    /// <see cref="AwsKmsKeyProviderOptions.KeyId"/>. Shared by <see cref="CreateAsync"/>
+    /// (unwrap-once) and the envelope-key cache refresh path so both go through identical
+    /// validation and both decrypt under the exact configured CMK. Static so it is callable
+    /// before an instance exists.
+    /// </summary>
+    internal static async Task<IReadOnlyDictionary<short, ReadOnlyMemory<byte>>> UnwrapAllAsync(
+        IAmazonKeyManagementService kms,
+        AwsKmsKeyProviderOptions options,
+        CancellationToken cancellationToken)
+    {
         if (options.WrappedKeys.Count == 0)
         {
             throw new OrionVaultConfigurationException(
                 "AwsKmsKeyProviderOptions.WrappedKeys is empty. At least one (keyId, ciphertextBase64) entry is required.");
         }
+        if (string.IsNullOrWhiteSpace(options.KeyId))
+        {
+            throw new OrionVaultConfigurationException(
+                "AwsKmsKeyProviderOptions.KeyId must be a non-empty AWS KMS customer master key id, key ARN, " +
+                "alias name or alias ARN. It is required: the provider pins every decrypt to this CMK so a " +
+                "substituted ciphertext blob wrapped under a different key cannot become the active data key.");
+        }
 
+        var cmk = options.KeyId;
         var tasks = options.WrappedKeys.Select(async pair =>
         {
             var (id, ciphertextBase64) = pair;
@@ -100,14 +131,16 @@ public sealed class AwsKmsKeyProvider : IKeyProvider
             }
 
             using var stream = new MemoryStream(ciphertext);
+            // KeyId pins the decrypt to the configured CMK. Omitting it lets KMS resolve the key
+            // from the blob's own metadata, which is what makes a substituted blob dangerous.
             var response = await kms.DecryptAsync(
-                new DecryptRequest { CiphertextBlob = stream },
+                new DecryptRequest { CiphertextBlob = stream, KeyId = cmk },
                 cancellationToken).ConfigureAwait(false);
             return (id, plaintext: (ReadOnlyMemory<byte>)response.Plaintext.ToArray());
         }).ToArray();
 
         var resolved = await Task.WhenAll(tasks).ConfigureAwait(false);
-        var dict = resolved.ToDictionary(x => x.id, x => x.plaintext);
-        return new AwsKmsKeyProvider(options.ActiveKeyId, dict);
+        return resolved.ToDictionary(x => x.id, x => x.plaintext);
     }
+
 }

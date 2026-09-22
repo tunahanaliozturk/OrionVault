@@ -100,6 +100,49 @@ All notable changes to OrionVault are recorded here. Format follows [Keep a Chan
   generic `CS0618` a project may already suppress wholesale.
 
   Reference `OrionVault.Testing` with `PrivateAssets="all"`.
+> **Publish note.** Everything below is in the four cloud key-provider packages —
+> `OrionVault.AwsKms`, `OrionVault.AzureKeyVault`, `OrionVault.GcpKms`, and
+> `OrionVault.HashiCorpVault` — which are still held from publishing (`IsPackable=false`, as in
+> 0.4.0 and 0.5.0). Only `OrionVault`, `OrionVault.EntityFrameworkCore`, and `OrionVault.Testing`
+> are on NuGet, and none of them changed. **No consumer action is required:** the new required
+> setting below cannot break anyone, because no released package exposes it. Projects consuming
+> `OrionVault.AwsKms` by project reference need the one-line change noted there.
+
+### Security
+
+- **AWS KMS decrypt now pins the CMK, and `AwsKmsKeyProviderOptions.KeyId` is required.**
+  `AwsKmsKeyProvider` called `DecryptAsync` with only `CiphertextBlob` and never set
+  `DecryptRequest.KeyId` — the only one of the four providers that did not pin its key (GCP passes
+  `CryptoKeyName`, HashiCorp validates `TransitKeyName`, Azure requires `KeyName`).
+
+  Without a pinned `KeyId`, KMS resolves the key from the ciphertext blob's own metadata. Anyone
+  able to influence the `WrappedKeys` configuration — a config store, an environment variable, an
+  `appsettings.json` baked into a container image, a compromised deploy pipeline — could substitute
+  a 32-byte data key they had wrapped under a CMK in their own account that the host principal
+  happens to hold `kms:Decrypt` on. Cross-account key policies and `kms:Decrypt` granted on
+  `Resource: "*"` make that reachable. KMS would decrypt it happily, the attacker-chosen key would
+  become OrionVault's active data key, and every row written afterwards would be readable by them.
+  The provider's only other check is the 32-byte length, which such a key passes.
+
+  Every decrypt — on both the unwrap-once startup path and the envelope-key cache refresh path — is
+  now issued with `DecryptRequest.KeyId` set to the configured CMK. `KeyId` accepts a key id, key
+  ARN, alias name (`alias/orionvault`) or alias ARN, and is **required**: an empty value throws
+  `OrionVaultConfigurationException` naming the setting, both from
+  `AwsKmsKeyProvider.CreateAsync` and at DI composition in `AddOrionVaultAwsKms`. Migration for a
+  project-reference consumer is one line:
+
+  ```csharp
+  services.AddOrionVaultAwsKms(o =>
+  {
+      o.KeyId = "arn:aws:kms:us-east-1:111122223333:key/abcd1234-…"; // new, required
+      o.ActiveKeyId = 1;
+      o.WrappedKeys[1] = "BASE64-KMS-CIPHERTEXT-FOR-KEY-1";
+  });
+  ```
+
+  Already-wrapped blobs are unaffected — pinning changes which key KMS is asked to decrypt under,
+  not the ciphertext format. A blob genuinely wrapped under the configured CMK keeps working; one
+  wrapped under any other key is now refused.
 
 ### Added
 
