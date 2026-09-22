@@ -751,4 +751,101 @@ public sealed class ReencryptionRunnerTests : IDisposable
             index.Matches(c.Email, c.EmailIndex).Should().BeTrue();
         }
     }
+
+    [Fact]
+    public async Task A_row_that_fails_mid_way_through_its_columns_is_not_half_persisted()
+    {
+        // FAILING - DOCUMENTS A DEFECT. ProcessRow mutates the tracked entity column by column, and
+        // the catch in ProcessBatch only increments the error counter: it neither reverts the
+        // columns already written nor detaches the entity. The batch SaveChangesAsync that follows
+        // therefore commits the half-migrated row while the report calls it an error. An operator
+        // reading "errors=1" believes the row was left alone for a later, manual repair; in fact
+        // part of it has already moved to the new key.
+        //
+        // Setup: one row on key 1 with both columns populated. The plan lists IdScan FIRST (it
+        // rotates cleanly) and Email SECOND, and Email's stored bytes are corrupted so the decrypt
+        // throws once IdScan has already been rewritten in memory.
+        var rowId = Guid.NewGuid();
+        await using (var seedSp = BuildEncryptingHost(activeKeyId: 1, withBlindIndex: false, activeIndexVersion: 0))
+        {
+            using var scope = seedSp.CreateScope();
+            var ctx = scope.ServiceProvider.GetRequiredService<EncryptingCtx>();
+            await ctx.Database.EnsureCreatedAsync();
+            ctx.Customers.Add(new Customer
+            {
+                Id = rowId,
+                Name = "half",
+                Email = "half@x.com",
+                EmailIndex = [],
+                IdScan = [4, 3, 2, 1],
+            });
+            await ctx.SaveChangesAsync();
+        }
+
+        await using var sp = BuildMaintenanceHost(withBlindIndex: false);
+
+        byte[] idScanBefore;
+        byte[] emailBefore;
+        using (var scope = sp.CreateScope())
+        {
+            var raw = scope.ServiceProvider.GetRequiredService<RawCtx>();
+            var row = await raw.Customers.SingleAsync(c => c.Id == rowId);
+            idScanBefore = [.. row.IdScan!];
+
+            // Corrupt the LAST byte of the Email envelope: the key-id header stays 1 (so the runner
+            // still decides the column needs rotation) but the AES-GCM tag no longer verifies.
+            emailBefore = [.. row.Email!];
+            emailBefore[^1] ^= 0xFF;
+        }
+
+        // Written with raw SQL rather than through the tracked entity: EF Core's default byte[]
+        // comparer would not reliably flag the edit as a change.
+        using (var corrupt = _conn.CreateCommand())
+        {
+            corrupt.CommandText = "UPDATE Customers SET Email = $email WHERE Name = $name;";
+            corrupt.Parameters.AddWithValue("$email", emailBefore);
+            corrupt.Parameters.AddWithValue("$name", "half");
+            (await corrupt.ExecuteNonQueryAsync()).Should().Be(1, "the corruption must actually land on disk");
+        }
+
+        // Guard: the row really is undecryptable now, so an Errors=0 result below cannot be a
+        // false negative from a corruption that silently did nothing.
+        using (var scope = sp.CreateScope())
+        {
+            var encryptor = scope.ServiceProvider.GetRequiredService<IEncryptor>();
+            var raw = scope.ServiceProvider.GetRequiredService<RawCtx>();
+            var stored = await raw.Customers.Where(c => c.Id == rowId).Select(c => c.Email).SingleAsync();
+            stored.Should().Equal(emailBefore);
+            Assert.ThrowsAny<Exception>(() => encryptor.DecryptString(stored!));
+        }
+
+        var plan = ReencryptionPlan.For<RawCustomer>(q => q.OrderBy(c => c.Id))
+            .WithColumn(EncryptedColumnPlan.ForBytes<RawCustomer>(
+                nameof(RawCustomer.IdScan), c => c.IdScan, (c, v) => c.IdScan = v))
+            .WithColumn(EncryptedColumnPlan.ForString<RawCustomer>(
+                nameof(RawCustomer.Email), c => c.Email, (c, v) => c.Email = v));
+
+        ReencryptionReport report;
+        using (var scope = sp.CreateScope())
+        {
+            var runner = scope.ServiceProvider.GetRequiredService<IEncryptionMaintenance>();
+            var ctx = scope.ServiceProvider.GetRequiredService<RawCtx>();
+            report = await runner.RunAsync(ctx, plan);
+        }
+
+        report.Scanned.Should().Be(1);
+        report.Errors.Should().Be(1, "the corrupted Email column cannot be decrypted");
+        report.ReEncrypted.Should().Be(0, "the row did not complete, so it must not be counted as re-encrypted");
+
+        using (var scope = sp.CreateScope())
+        {
+            var raw = scope.ServiceProvider.GetRequiredService<RawCtx>();
+            var after = await raw.Customers.SingleAsync(c => c.Id == rowId);
+
+            after.Email.Should().Equal(emailBefore, "the failing column was never written");
+            after.IdScan.Should().Equal(
+                idScanBefore,
+                "a row the report counts as an error must be left exactly as it was found, not persisted half-migrated");
+        }
+    }
 }
