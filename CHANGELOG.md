@@ -73,6 +73,25 @@ All notable changes to OrionVault are recorded here. Format follows [Keep a Chan
   provider lifetime" with no mention of a refresh path, and their DI extension remarks documented
   only the blocking startup unwrap. Both now describe the opt-in envelope-key cache alongside it,
   matching the GCP wording. The AWS README documents the required `KeyId` and why it is required.
+- **Two hosts of the same DbContext type with different keys could read each other's data.**
+  OrionVault's value converters capture one `IEncryptor` by closure, and the converters live on the
+  compiled model. EF Core's compiled-model cache is process-wide and its default key is the DbContext
+  CLR type alone, and OrionVault shipped no replacement — so whichever host built the model first lent
+  its encryptor to every later host of the same context type. A second tenant, wired to completely
+  different key material, decrypted the first tenant's ciphertext and got its plaintext back. Any
+  deployment that resolves more than one key set over one DbContext type — per-tenant keys, a
+  key-rotation cutover host, a test suite that builds several hosts — was exposed.
+
+  `UseOrionVault`, `AddOrionVaultDbContext<T>` and `AddOrionVaultBoundDbContext<T>` now also replace
+  `IModelCacheKeyFactory` with the new public `OrionVaultModelCacheKeyFactory`, which adds the bound
+  key material to the cache key. If you assemble `DbContextOptions` by hand alongside
+  `KeyedOrionVaultModelCustomizer<T>`, add
+  `opt.ReplaceService<IModelCacheKeyFactory, OrionVaultModelCacheKeyFactory>()` — it is not optional.
+
+  The discriminator is a truncated SHA-256 digest over the key provider's type, its active key id,
+  its key count and the active key's bytes: stable across container rebuilds of the same
+  configuration (so the model is still compiled once), and different whenever the key material is.
+  It is one-way and truncated, and is only ever used as a dictionary key.
 
 ### Security
 

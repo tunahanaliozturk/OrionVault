@@ -102,6 +102,11 @@ public static class OrionVaultEntityFrameworkCoreBuilderExtensions
         // bind an instance whose ctor cannot satisfy its IEncryptionConfigurator parameter.
         builder.UseApplicationServiceProvider(serviceProvider);
         builder.ReplaceService<IModelCustomizer, OrionVaultModelCustomizer>();
+        // The converters this customizer attaches capture ONE encryptor, and EF Core's compiled-model
+        // cache is process-wide and keyed on the DbContext type alone. Without this replacement a
+        // second host of the same context type - a second tenant, a different key set - reuses the
+        // first host's model and therefore its encryptor.
+        builder.ReplaceService<IModelCacheKeyFactory, OrionVaultModelCacheKeyFactory>();
         return builder;
     }
 
@@ -154,6 +159,9 @@ public static class OrionVaultEntityFrameworkCoreBuilderExtensions
                 opt.UseApplicationServiceProvider(sp);
                 opt.ReplaceService<Microsoft.EntityFrameworkCore.Infrastructure.IModelCustomizer,
                     KeyedOrionVaultModelCustomizer<TDbContext>>();
+                // Same reason as UseOrionVault: the keyed configurator's converters capture the named
+                // provider's encryptor, so the compiled model must be keyed on that key material too.
+                opt.ReplaceService<IModelCacheKeyFactory, OrionVaultModelCacheKeyFactory>();
             },
             contextLifetime,
             optionsLifetime);
