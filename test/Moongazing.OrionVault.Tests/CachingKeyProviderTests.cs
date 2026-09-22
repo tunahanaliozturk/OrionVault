@@ -354,4 +354,155 @@ public sealed class CachingKeyProviderTests
         Assert.True(Key32(0x22).AsSpan().SequenceEqual(sut.TryGetKey(1)!.Value.Span));
         Assert.Equal(2, source.Calls);
     }
+
+    [Fact]
+    public async Task Revocation_latches_so_every_later_caller_fails_not_just_the_gate_winner()
+    {
+        // The regression. Before the latch, only whichever caller won refreshGate.Wait(0) saw the
+        // revocation: every other caller was served the stale plaintext of a key the KMS had
+        // explicitly stopped honouring, and because the stale snapshot was retained the same race
+        // replayed on every lookup afterwards. An operator who disabled the key to stop writes
+        // did not stop them - they stopped for one request in N, indefinitely.
+        var time = new ManualTimeProvider(DateTimeOffset.UnixEpoch);
+        var source = new CountingSource(1, _ => new Dictionary<short, ReadOnlyMemory<byte>> { [1] = Key32(0x11) })
+        {
+            ThrowOnCall = call => call >= 2
+                ? new KeyUnwrapException(KeyUnwrapFailureKind.Revocation, "key revoked")
+                : null,
+        };
+        using var gate = new ManualResetEventSlim(false);
+        using var sut = new CachingKeyProvider(source, Enabled(TimeSpan.FromMinutes(15), serveStale: true), time);
+
+        Assert.True(Key32(0x11).AsSpan().SequenceEqual(sut.TryGetKey(1)!.Value.Span));
+        time.Advance(TimeSpan.FromMinutes(20));
+
+        // Hold the revoking refresh open so it is genuinely in flight, exactly as a real KMS
+        // round-trip would be, rather than resolving before anything can race it.
+        source.BlockOnCall = gate;
+        var refresher = Task.Run(() => sut.TryGetKey(1));
+        var spin = new SpinWait();
+        while (source.Calls < 2)
+        {
+            spin.SpinOnce();
+        }
+
+        // Release it; the gate winner establishes the revocation and fails.
+        gate.Set();
+        var settled = await Task.WhenAny(refresher, Task.Delay(TimeSpan.FromSeconds(5))).ConfigureAwait(true);
+        Assert.True(ReferenceEquals(settled, refresher), "The revoking refresh never completed.");
+        var winner = await Assert.ThrowsAsync<KeyUnwrapException>(() => refresher).ConfigureAwait(true);
+        Assert.Equal(KeyUnwrapFailureKind.Revocation, winner.Kind);
+
+        // Now the part that used to be broken: a burst of concurrent callers arriving after the
+        // revocation is established. Every one of them must fail closed. Before the latch, 31 of
+        // these 32 were handed the revoked key.
+        var callers = new Task<KeyUnwrapFailureKind?>[32];
+        for (var i = 0; i < callers.Length; i++)
+        {
+            callers[i] = Task.Run(() =>
+            {
+                try
+                {
+                    sut.TryGetKey(1);
+                    return (KeyUnwrapFailureKind?)null; // served a key - the bug
+                }
+                catch (KeyUnwrapException ex)
+                {
+                    return ex.Kind;
+                }
+            });
+        }
+
+        var all = Task.WhenAll(callers);
+        var done = await Task.WhenAny(all, Task.Delay(TimeSpan.FromSeconds(5))).ConfigureAwait(true);
+        Assert.True(ReferenceEquals(done, all), "Callers blocked instead of failing closed from the latch.");
+        Assert.All(
+            await all.ConfigureAwait(true),
+            kind => Assert.Equal(KeyUnwrapFailureKind.Revocation, kind));
+
+        // They failed from the latch, not by each re-hitting the KMS: no clock time passed, so the
+        // once-per-TTL re-probe is not due and the unwrap count is unchanged.
+        Assert.Equal(2, source.Calls);
+
+        // The revoked snapshot is gone rather than merely unreachable.
+        Assert.Equal(-1, sut.KeyCount);
+    }
+
+    [Fact]
+    public void Latched_revocation_clears_itself_once_the_key_is_usable_again()
+    {
+        // What un-sticks the latch: a later successful unwrap, probed by one caller at a time and
+        // no more often than the TTL. An operator who re-enables the key gets service back within
+        // a TTL without restarting the host - the same cadence by which the revocation took hold.
+        var time = new ManualTimeProvider(DateTimeOffset.UnixEpoch);
+        var source = new CountingSource(
+            1,
+            call => new Dictionary<short, ReadOnlyMemory<byte>> { [1] = Key32(call >= 3 ? (byte)0x22 : (byte)0x11) })
+        {
+            ThrowOnCall = call => call == 2
+                ? new KeyUnwrapException(KeyUnwrapFailureKind.Revocation, "key revoked")
+                : null,
+        };
+        using var sut = new CachingKeyProvider(source, Enabled(TimeSpan.FromMinutes(15), serveStale: true), time);
+
+        Assert.True(Key32(0x11).AsSpan().SequenceEqual(sut.TryGetKey(1)!.Value.Span));
+
+        time.Advance(TimeSpan.FromMinutes(20));
+        Assert.Equal(KeyUnwrapFailureKind.Revocation, Assert.Throws<KeyUnwrapException>(() => sut.TryGetKey(1)).Kind);
+        Assert.Equal(2, source.Calls);
+
+        // Still latched, and repeated lookups do not hammer the KMS: the probe is TTL-rate-limited.
+        for (var i = 0; i < 5; i++)
+        {
+            Assert.Throws<KeyUnwrapException>(() => sut.TryGetKey(1));
+        }
+        Assert.Equal(2, source.Calls);
+
+        // A TTL later the access is restored; the next lookup re-probes, succeeds, and the latch
+        // clears - no restart, no explicit call.
+        time.Advance(TimeSpan.FromMinutes(15));
+        Assert.True(Key32(0x22).AsSpan().SequenceEqual(sut.TryGetKey(1)!.Value.Span));
+        Assert.Equal(3, source.Calls);
+
+        // And it stays cleared: back to ordinary cached service.
+        Assert.True(Key32(0x22).AsSpan().SequenceEqual(sut.TryGetKey(1)!.Value.Span));
+        Assert.Equal(3, source.Calls);
+    }
+
+    [Fact]
+    public async Task Transient_failure_still_serves_stale_to_every_caller_and_does_not_latch()
+    {
+        // The latch must not catch transient faults. A throttled or briefly unreachable KMS is
+        // precisely when serving the last-good snapshot is correct; failing those requests would
+        // be a worse outcome than the bug the latch fixes.
+        var time = new ManualTimeProvider(DateTimeOffset.UnixEpoch);
+        var source = new CountingSource(1, _ => new Dictionary<short, ReadOnlyMemory<byte>> { [1] = Key32(0x11) })
+        {
+            ThrowOnCall = call => call == 2
+                ? new KeyUnwrapException(KeyUnwrapFailureKind.Transient, "kms throttled")
+                : null,
+        };
+        using var sut = new CachingKeyProvider(source, Enabled(TimeSpan.FromMinutes(15), serveStale: true), time);
+
+        Assert.True(Key32(0x11).AsSpan().SequenceEqual(sut.TryGetKey(1)!.Value.Span));
+        time.Advance(TimeSpan.FromMinutes(20));
+
+        var callers = new Task<bool>[16];
+        for (var i = 0; i < callers.Length; i++)
+        {
+            callers[i] = Task.Run(() =>
+            {
+                var key = sut.TryGetKey(1);
+                return key is not null && Key32(0x11).AsSpan().SequenceEqual(key.Value.Span);
+            });
+        }
+
+        var all = Task.WhenAll(callers);
+        var done = await Task.WhenAny(all, Task.Delay(TimeSpan.FromSeconds(5))).ConfigureAwait(true);
+        Assert.True(ReferenceEquals(done, all), "A transient refresh failure must not fail or block callers.");
+        Assert.All(await all.ConfigureAwait(true), served => Assert.True(served));
+
+        // No latch was set: the snapshot is still held and still being served.
+        Assert.Equal(1, sut.KeyCount);
+    }
 }

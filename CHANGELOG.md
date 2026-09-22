@@ -6,6 +6,14 @@ All notable changes to OrionVault are recorded here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+> **Publish note.** `OrionVault.AwsKms`, `OrionVault.AzureKeyVault`, `OrionVault.GcpKms` and
+> `OrionVault.HashiCorpVault` are still held from publishing (`IsPackable=false`, as in 0.4.0 and
+> 0.5.0). Entries scoped to those four packages need no consumer action — including the new
+> **required** `AwsKmsKeyProviderOptions.KeyId`, which cannot break anyone because no released
+> package exposes it; a project-reference consumer adds one line. Entries in `OrionVault`,
+> `OrionVault.EntityFrameworkCore` and `OrionVault.Testing` *do* affect published packages, and
+> the envelope-key cache change below is one of them.
+
 ### Changed
 
 - **`OV0002` is now an error, and it catches the query shapes people actually write.** The rule
@@ -112,6 +120,7 @@ All notable changes to OrionVault are recorded here. Format follows [Keep a Chan
 > are on NuGet, and none of them changed. **No consumer action is required:** the new required
 > setting below cannot break anyone, because no released package exposes it. Projects consuming
 > `OrionVault.AwsKms` by project reference need the one-line change noted there.
+
 - **AWS KMS decrypt now pins the CMK, and `AwsKmsKeyProviderOptions.KeyId` is required.**
   `AwsKmsKeyProvider` called `DecryptAsync` with only `CiphertextBlob` and never set
   `DecryptRequest.KeyId` — the only one of the four providers that did not pin its key (GCP passes
@@ -145,6 +154,36 @@ All notable changes to OrionVault are recorded here. Format follows [Keep a Chan
   Already-wrapped blobs are unaffected — pinning changes which key KMS is asked to decrypt under,
   not the ciphertext format. A blob genuinely wrapped under the configured CMK keeps working; one
   wrapped under any other key is now refused.
+
+- **A revoked key now stops working for every caller, not just the one that won the refresh race.**
+  In `OrionVault` (published). `CachingKeyProvider` refreshes behind a non-blocking single-flight
+  gate: when the snapshot expires under concurrent traffic one caller performs the unwrap and
+  everyone who loses `refreshGate.Wait(0)` is served the stale snapshot rather than queueing. If
+  that refresh reported a revocation, only the gate winner failed. Every concurrent caller had
+  already encrypted or decrypted with the revoked key, and because the stale snapshot was retained
+  the same race replayed on the next lookup, and the next — so an operator who disabled a
+  compromised key to stop writes did not stop them, they stopped one request in N, indefinitely.
+
+  This affects every provider wired through the cache, not only the AWS and Azure registrations
+  added in this release: the gate has lived in `CachingKeyProvider` since it and the GCP / Vault
+  seams shipped together in 0.4.0, so **GCP KMS and HashiCorp Vault have had this behaviour since
+  then**. The fix is in the shared cache, so all four get it at once.
+
+  A revocation now **latches**. The first refresh to report one drops the cached snapshot and
+  records the denial; from that moment every caller fails closed immediately — no stale key, no
+  KMS round-trip, whoever wins any race. It clears itself: one caller at a time re-probes the KMS,
+  no more often than the cache TTL, so re-enabling the key or restoring access restores service
+  within a TTL with no restart and no new API. `KeyCount` reports `-1` while latched.
+
+  Serve-stale-on-transient is deliberately untouched — a throttled or briefly unreachable KMS
+  still serves the last-good snapshot to every caller, which is the whole point of that policy.
+  Only `KeyUnwrapFailureKind.Revocation` latches.
+
+  One window is knowingly left open: a caller that loses the gate while the *first*
+  revocation-reporting refresh is still in flight is still served the stale key, because nothing
+  yet knows the key is revoked. That is bounded by one KMS round-trip and happens once, rather
+  than repeating on every expiry. Closing it would mean blocking every reader on a network call
+  once per TTL, reintroducing the thread-pool starvation the non-blocking gate exists to avoid.
 
 ### Added
 

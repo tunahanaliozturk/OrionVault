@@ -30,6 +30,14 @@ using Moongazing.OrionVault.Exceptions;
 /// revocation-class failure (key disabled / revoked / not-found / access withdrawn, surfaced as a
 /// <see cref="KeyUnwrapException"/> of kind <see cref="KeyUnwrapFailureKind.Revocation"/>) always
 /// fails closed regardless of that flag.</item>
+/// <item>A revocation LATCHES. Failing only the caller that happened to win the refresh gate
+/// would leave every concurrent and subsequent caller decrypting with the revoked key, and the
+/// race would repeat on each expiry for as long as traffic lasts. Once a refresh has established
+/// a revocation the snapshot is dropped and every later caller fails closed immediately, without
+/// a KMS round-trip. The latch clears by itself: one caller at a time re-probes, no more often
+/// than the TTL, so an operator who re-enables the key gets service back within a TTL rather than
+/// needing a process restart. See <see cref="EnsureFresh"/> for the one window this does not
+/// close.</item>
 /// <item>Time is read through an injected <see cref="System.TimeProvider"/> so TTL expiry is
 /// deterministic under test.</item>
 /// </list>
@@ -46,6 +54,11 @@ public sealed class CachingKeyProvider : IKeyProvider, IDisposable
 
     // Read on every TryGetKey; written only under refreshGate. volatile so the swap publishes.
     private volatile Snapshot? current;
+
+    // Set once a refresh has established that the key is revoked; cleared by a later successful
+    // unwrap. Read on every TryGetKey, written only under refreshGate. volatile so the latch
+    // publishes to racing readers as soon as the refreshing thread sets it.
+    private volatile Denial? denial;
 
     /// <summary>
     /// Constructs a caching provider over the supplied <paramref name="source"/>.
@@ -98,6 +111,15 @@ public sealed class CachingKeyProvider : IKeyProvider, IDisposable
 
     private Snapshot EnsureFresh()
     {
+        // Checked before the snapshot: once a revocation is latched nobody is served a cached key
+        // again, whether or not they hold one and whoever wins the gate. Costs one volatile read
+        // on the hot path.
+        var latched = denial;
+        if (latched is not null)
+        {
+            return RetryAfterRevocation(latched);
+        }
+
         var snapshot = current;
         if (snapshot is not null && !IsExpired(snapshot))
         {
@@ -112,6 +134,21 @@ public sealed class CachingKeyProvider : IKeyProvider, IDisposable
             // refreshing, serve the current snapshot immediately instead of queueing.
             if (!refreshGate.Wait(0))
             {
+                // Re-read the latch: the in-flight refresh may have established a revocation
+                // between the check at the top of this method and here. This does not close the
+                // window entirely - a caller that loses the gate while the very first
+                // revocation-reporting refresh is still awaiting the KMS is served the stale key,
+                // because nothing yet knows the key is revoked. That window is one KMS round-trip
+                // and happens once: the latch it then sets stops every caller after it, so the
+                // race cannot repeat on each expiry for as long as traffic lasts. Closing it
+                // outright would mean blocking every reader on a network call once per TTL, which
+                // is the thread-pool starvation this non-blocking gate exists to avoid.
+                latched = denial;
+                if (latched is not null)
+                {
+                    return RetryAfterRevocation(latched);
+                }
+
                 return current ?? snapshot;
             }
 
@@ -150,6 +187,40 @@ public sealed class CachingKeyProvider : IKeyProvider, IDisposable
         }
     }
 
+    // A revocation is latched. Everyone fails closed; one caller at a time, and no more often than
+    // the TTL, re-probes the KMS so the latch can clear without a process restart.
+    private Snapshot RetryAfterRevocation(Denial latched)
+    {
+        if (timeProvider.GetUtcNow() - latched.LatchedAtUtc >= ttl && refreshGate.Wait(0))
+        {
+            try
+            {
+                // Another caller may have re-probed successfully while we were getting here.
+                if (denial is null && current is { } recovered && !IsExpired(recovered))
+                {
+                    return recovered;
+                }
+
+                // previous: null - there is deliberately nothing to serve stale from. A probe
+                // that fails again (for any reason) leaves the latch standing and throws.
+                return Refresh(previous: null);
+            }
+            finally
+            {
+                refreshGate.Release();
+            }
+        }
+
+        throw new KeyUnwrapException(
+            KeyUnwrapFailureKind.Revocation,
+            "CachingKeyProvider: the backing KMS reported this key as revoked (disabled / deleted / " +
+            "access withdrawn), so the cached data keys were dropped and every lookup fails closed. " +
+            $"The unwrap is retried at most once per cache TTL ({ttl}); re-enabling the key or " +
+            "restoring access clears this automatically on the next successful unwrap. " +
+            $"Original failure: {latched.Cause.Message}",
+            latched.Cause);
+    }
+
     // Called holding refreshGate.
     private Snapshot Refresh(Snapshot? previous)
     {
@@ -173,10 +244,21 @@ public sealed class CachingKeyProvider : IKeyProvider, IDisposable
             _ = ex;
             return previous!;
         }
+        catch (Exception ex) when (IsRevocation(ex))
+        {
+            // Latch before rethrowing, and drop the snapshot with it. Without this only the caller
+            // holding the gate would fail while every racing and subsequent caller kept being
+            // served the cached plaintext of a key the KMS has explicitly stopped honouring.
+            denial = new Denial(ex, timeProvider.GetUtcNow());
+            current = null;
+            throw;
+        }
 
         var validated = Validate(unwrapped);
         var fresh = new Snapshot(validated, timeProvider.GetUtcNow());
         current = fresh;
+        // A successful unwrap is the authoritative signal that access is back; clear the latch.
+        denial = null;
         return fresh;
     }
 
@@ -227,6 +309,21 @@ public sealed class CachingKeyProvider : IKeyProvider, IDisposable
 
     /// <inheritdoc />
     public void Dispose() => refreshGate.Dispose();
+
+    // A latched revocation: the failure that established it, and when, so the re-probe can be
+    // rate-limited to the TTL instead of hammering the KMS once per lookup.
+    private sealed class Denial
+    {
+        public Denial(Exception cause, DateTimeOffset latchedAtUtc)
+        {
+            Cause = cause;
+            LatchedAtUtc = latchedAtUtc;
+        }
+
+        public Exception Cause { get; }
+
+        public DateTimeOffset LatchedAtUtc { get; }
+    }
 
     private sealed class Snapshot
     {
