@@ -6,8 +6,25 @@ using Moongazing.OrionVault.GcpKms;
 using Xunit;
 
 /// <summary>
-/// Live Google Cloud KMS integration tests. Skipped locally unless the consumer sets the required
-/// environment variables:
+/// Marks a live Cloud KMS test that is reported as <em>Skipped</em> (not a vacuous pass) unless the
+/// required environment variables are present. The skip reason is evaluated at discovery time, so a
+/// missing-config run shows these as genuinely skipped rather than green.
+/// </summary>
+internal sealed class SkipUnlessGcpConfiguredFactAttribute : Xunit.FactAttribute
+{
+    public SkipUnlessGcpConfiguredFactAttribute()
+    {
+        if (!GcpKmsKeyProviderLiveTests.IsConfigured)
+        {
+            Skip = "Live Cloud KMS not configured: set ORIONVAULT_GCP_CRYPTO_KEY to run.";
+        }
+    }
+}
+
+/// <summary>
+/// Live Google Cloud KMS integration tests. Reported as Skipped (via
+/// <see cref="SkipUnlessGcpConfiguredFactAttribute"/>) - not a vacuous pass - unless the consumer
+/// sets the required environment variables:
 /// <list type="bullet">
 ///   <item><description><c>ORIONVAULT_GCP_CRYPTO_KEY</c> - a full Cloud KMS crypto-key resource name,
 ///   e.g. <c>projects/p/locations/global/keyRings/r/cryptoKeys/k</c>.</description></item>
@@ -41,13 +58,9 @@ public sealed class GcpKmsKeyProviderLiveTests
         return Convert.ToBase64String(response.Ciphertext.ToByteArray());
     }
 
-    [Fact]
+    [SkipUnlessGcpConfiguredFact]
     public async Task CreateAsync_unwraps_two_keys_against_live_kms()
     {
-        if (!IsConfigured)
-        {
-            return; // Vacuous pass when env vars are absent; the real assertion only runs live.
-        }
         var kms = await KeyManagementServiceClient.CreateAsync();
         var keyOne = Key32(0x11);
         var keyTwo = Key32(0x22);
@@ -64,13 +77,9 @@ public sealed class GcpKmsKeyProviderLiveTests
         Assert.True(keyTwo.AsSpan().SequenceEqual(provider.TryGetKey(2)!.Value.Span));
     }
 
-    [Fact]
+    [SkipUnlessGcpConfiguredFact]
     public async Task CreateAsync_rejects_wrong_length_plaintext_against_live_kms()
     {
-        if (!IsConfigured)
-        {
-            return;
-        }
         var kms = await KeyManagementServiceClient.CreateAsync();
         var sixteen = new byte[16];
         Array.Fill(sixteen, (byte)0x33);

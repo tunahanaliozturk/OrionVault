@@ -84,7 +84,7 @@ flowchart LR
 |---------|-------------|
 | `OrionVault` | Core: `IEncryptor`, `IKeyProvider`, `IEncryptionConfigurator`, AES-256-GCM cipher, static key provider, searchable blind index (`IBlindIndexProvider`), telemetry. Bundles the Roslyn analyzer (`analyzers/dotnet/cs/`). |
 | `OrionVault.EntityFrameworkCore` | EF Core integration: `[Encrypted]` attribute, `IsEncrypted()` fluent API, value converter factory, `IModelCustomizer` wiring, `UseOrionVault()` extension. |
-| `OrionVault.Testing` | Test helpers: `AddOrionVaultForTesting()` DI extension, deterministic `TestKeyProvider`, `PlaintextEncryptor` for raw-layout tests, `EncryptionAssertions`. |
+| `OrionVault.Testing` | Test helpers: `AddOrionVaultForTesting()` DI extension, `DangerousTestKeyProvider` (zero key, explicit opt-in required), `EncryptionAssertions`. Reference it with `PrivateAssets="all"`. |
 | `OrionVault.AwsKms` _(in repo, not yet on NuGet)_ | AWS KMS `IKeyProvider` — unwraps data keys from AWS Key Management Service. |
 | `OrionVault.AzureKeyVault` _(in repo, not yet on NuGet)_ | Azure Key Vault `IKeyProvider` — unwraps data keys from Azure Key Vault. |
 | `OrionVault.GcpKms` _(in repo, not yet on NuGet)_ | Google Cloud KMS `IKeyProvider` — unwraps data keys from GCP Key Management. |
@@ -198,7 +198,7 @@ To actually retire key 1, re-encrypt existing rows by running them through `Save
 
 ## Searchable encrypted columns
 
-AES-GCM is randomized: encrypting the same plaintext twice produces different ciphertext. That means SQL `WHERE Email = @p` does not work against an encrypted column. The Roslyn analyzer warns about this at compile time (`OV0002`).
+AES-GCM is randomized: encrypting the same plaintext twice produces different ciphertext. That means SQL `WHERE Email = @p` does not work against an encrypted column. The Roslyn analyzer fails the build on this at compile time (`OV0002`), including the invocation shapes - `Contains`, `StartsWith`, `string.Equals`, `EF.Functions.Like`, `emails.Contains(u.Email)` - that look nothing like `==` but reach SQL the same way.
 
 v0.3.0 adds a first-class **blind index** for exactly this case. A blind index is a deterministic, keyed HMAC-SHA256 digest of a normalized value: equal plaintexts always produce equal indexes, the index cannot be reversed to the plaintext without the key, and the stored ciphertext stays randomized and non-deterministic. You store the index in a separate, non-encrypted `byte[]` column and query it with an equality predicate.
 
@@ -277,10 +277,12 @@ Three diagnostics ship inside the core nupkg's `analyzers/dotnet/cs/` directory.
 | Id      | Severity | Catches |
 |---------|----------|---------|
 | OV0001  | Error    | `[Encrypted]` on a property whose type is not `string` or `byte[]`. |
-| OV0002  | Warning  | LINQ `Where`/`==` comparison against an encrypted column (always returns false). |
+| OV0002  | Error    | LINQ predicate filtering on an encrypted column (matches no rows, reports success). |
 | OV0003  | Info     | LINQ `OrderBy` / `GroupBy` on an encrypted column (executes client-side after decryption). |
 
-Suppress per-call site with `#pragma warning disable OV0002` when you know what you are doing (for example, fetching a single row by primary key and filtering in memory).
+`OV0002` covers the invocation shapes as well as `==`: `col.Contains(x)`, `StartsWith`, `EndsWith`, `string.Equals(col, x)`, `EF.Functions.Like(col, ...)`, and `emails.Contains(col)`. It is deliberately **not** raised when an operand is `null` - `col == null`, `string.Equals(col, null)`, `object.Equals(col, null)`, `col.Equals(null)`, `ReferenceEquals(col, null)` - because those all translate to `IS NULL`, which is evaluated on the column rather than its contents and works correctly against ciphertext. Nor is it raised for in-memory `IEnumerable` queries, where the value converter has already decrypted the column.
+
+It is an error rather than a warning because the predicate is false for every row and fails silently: the screen renders empty, and a `Where(...).ExecuteDelete()` erasure deletes nothing and reports success. Suppress per-call site with `#pragma warning disable OV0002` when you know what you are doing (for example, fetching a single row by primary key and filtering in memory).
 
 ## Telemetry
 
@@ -307,7 +309,25 @@ See [benchmarks.md](benchmarks.md) for the scenarios we measure (encrypt and dec
 
 ## Testing
 
-The `Moongazing.OrionVault.Testing` package wires a deterministic key provider and the real AES-GCM encryptor for fast unit tests:
+The `Moongazing.OrionVault.Testing` package wires a deterministic key provider and the real AES-GCM encryptor for fast unit tests. Reference it with `PrivateAssets="all"`, and opt in once - the key it serves is 32 zero bytes, so the provider refuses to construct until a process says out loud that it is a test process:
+
+```xml
+<PackageReference Include="OrionVault.Testing" Version="..." PrivateAssets="all" />
+```
+
+```csharp
+using System.Runtime.CompilerServices;
+using Moongazing.OrionVault.Testing;
+
+internal static class TestSetup
+{
+    // Runs before the first test in the assembly.
+    [ModuleInitializer]
+    internal static void Enable() => DangerousTestKeyProvider.Enable();
+}
+```
+
+Then the wiring is ordinary:
 
 ```csharp
 using Moongazing.OrionVault.Testing.DependencyInjection;
@@ -331,7 +351,13 @@ EncryptionAssertions.IsEncrypted(raw);
 EncryptionAssertions.IsEncryptedWithKey(raw, expectedKeyId: 1);
 ```
 
-If you want to bypass real cryptography in a test that is asserting wiring rather than crypto, register `PlaintextEncryptor` instead and read the header bytes directly.
+`OrionVault.Testing` is test-only and says so in three places, because a test double that reaches production is indistinguishable from no encryption at all:
+
+- Reference it with `PrivateAssets="all"` so it cannot flow into a dependent's build.
+- `DangerousTestKeyProvider` serves an all-zero AES key and refuses to construct until the process opts in - call `DangerousTestKeyProvider.Enable()` from test setup (a `[ModuleInitializer]` works well) or set the `Moongazing.OrionVault.Testing.EnableDangerousTestKeys` AppContext switch in the test project.
+- Using it raises `OV9000`, which you must suppress explicitly.
+
+The package ships no fake `IEncryptor`. Tests that need to inspect the envelope layout read it with `EncryptionAssertions` against real ciphertext instead.
 
 ## Veil vs OrionVault
 

@@ -4,6 +4,7 @@ using System.Text;
 using Moongazing.OrionVault.Testing;
 using Xunit;
 
+#pragma warning disable OV9000 // the zero-key provider under test is exactly what this suite exercises
 public sealed class EncryptionAssertionsTests
 {
     private static byte[] BuildCiphertext(short keyId)
@@ -33,7 +34,7 @@ public sealed class EncryptionAssertionsTests
     [Fact]
     public void IsEncryptedWithActiveKey_passes_when_key_id_matches()
     {
-        var provider = new TestKeyProvider(activeKeyId: 7);
+        var provider = new DangerousTestKeyProvider(activeKeyId: 7);
         provider.Add(7, new byte[32]);
 
         EncryptionAssertions.IsEncryptedWithActiveKey(BuildCiphertext(7), provider);
@@ -42,7 +43,7 @@ public sealed class EncryptionAssertionsTests
     [Fact]
     public void IsEncryptedWithActiveKey_throws_when_key_id_mismatches()
     {
-        var provider = new TestKeyProvider(activeKeyId: 7);
+        var provider = new DangerousTestKeyProvider(activeKeyId: 7);
         provider.Add(7, new byte[32]);
 
         var ex = Assert.Throws<Xunit.Sdk.XunitException>(
@@ -128,3 +129,4 @@ public sealed class EncryptionAssertionsTests
         EncryptionAssertions.DoesNotContainPlaintext(bytes, "anything");
     }
 }
+#pragma warning restore OV9000
