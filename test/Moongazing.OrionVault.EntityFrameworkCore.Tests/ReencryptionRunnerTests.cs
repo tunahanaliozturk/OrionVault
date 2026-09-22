@@ -154,7 +154,7 @@ public sealed class ReencryptionRunnerTests : IDisposable
 
     private static ReencryptionPlan<RawCustomer> EmailPlan(bool withBlindIndex)
     {
-        var plan = ReencryptionPlan.For<RawCustomer>(q => q.OrderBy(c => c.Id));
+        var plan = ReencryptionPlan.For<RawCustomer, Guid>(c => c.Id);
         if (withBlindIndex)
         {
             plan.WithColumn(EncryptedColumnPlan.ForStringWithBlindIndex<RawCustomer>(
@@ -477,7 +477,7 @@ public sealed class ReencryptionRunnerTests : IDisposable
         }
 
         await using var sp = BuildMaintenanceHost(withBlindIndex: false);
-        var plan = ReencryptionPlan.For<RawCustomer>(q => q.OrderBy(c => c.Id))
+        var plan = ReencryptionPlan.For<RawCustomer, Guid>(c => c.Id)
             .WithColumn(EncryptedColumnPlan.ForString<RawCustomer>(
                 nameof(RawCustomer.Email), c => c.Email, (c, v) => c.Email = v))
             .WithColumn(EncryptedColumnPlan.ForBytes<RawCustomer>(
@@ -517,7 +517,7 @@ public sealed class ReencryptionRunnerTests : IDisposable
         }
 
         await using var sp = BuildMaintenanceHost(withBlindIndex: false);
-        var plan = ReencryptionPlan.For<RawCustomer>(q => q.OrderBy(c => c.Id))
+        var plan = ReencryptionPlan.For<RawCustomer, Guid>(c => c.Id)
             .WithColumn(EncryptedColumnPlan.ForBytes<RawCustomer>(
                 nameof(RawCustomer.IdScan), c => c.IdScan, (c, v) => c.IdScan = v));
 
@@ -561,7 +561,7 @@ public sealed class ReencryptionRunnerTests : IDisposable
         var ctx = scope.ServiceProvider.GetRequiredService<RawCtx>();
         await ctx.Database.EnsureCreatedAsync();
 
-        var emptyPlan = ReencryptionPlan.For<RawCustomer>(q => q.OrderBy(c => c.Id));
+        var emptyPlan = ReencryptionPlan.For<RawCustomer, Guid>(c => c.Id);
         var act = async () => await runner.RunAsync(ctx, emptyPlan);
         await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*no columns*");
     }
@@ -732,7 +732,7 @@ public sealed class ReencryptionRunnerTests : IDisposable
         }
 
         // Email is listed FIRST so it rotates successfully before IdScan throws.
-        var plan = ReencryptionPlan.For<RawCustomer>(q => q.OrderBy(c => c.Id))
+        var plan = ReencryptionPlan.For<RawCustomer, Guid>(c => c.Id)
             .WithColumn(EncryptedColumnPlan.ForString<RawCustomer>(
                 nameof(RawCustomer.Email), c => c.Email, (c, v) => c.Email = v))
             .WithColumn(EncryptedColumnPlan.ForBytes<RawCustomer>(
@@ -782,6 +782,99 @@ public sealed class ReencryptionRunnerTests : IDisposable
             var after = await raw.Customers.SingleAsync();
             after.Email.Should().Equal(emailBefore);
         }
+    }
+
+    [Fact]
+    public async Task A_concurrent_delete_below_the_cursor_does_not_make_the_pass_step_over_a_row()
+    {
+        // Regression: offset paging (Skip(offset)/Take) over a LIVE table. The comment that used to
+        // justify it argued the sort key is immutable - which is true of the ORDER, not of the
+        // OFFSET. Delete any row sorting below the current offset and the whole window shifts down
+        // by one, so the next page starts one row late and the pass never visits that row. It keeps
+        // the revoked key forever while the final report still reads errors=0: a clean-looking
+        // sweep over data it never rotated. The delete here is constructed deliberately - a second
+        // connection at an exact point between batches - rather than raced for.
+        const int batchSize = 3;
+        const int rowCount = 3 * batchSize;
+
+        // Ids that sort in a known order, so "a row below the offset" is a precise statement. They
+        // start at 1 because an all-zero Guid key reads as "unset" to EF, which would replace it
+        // with a generated one and break the ordering this test depends on.
+        var ids = Enumerable.Range(1, rowCount)
+            .Select(i => new Guid($"00000000-0000-0000-0000-{i:D12}"))
+            .ToArray();
+
+        await using (var seedSp = BuildEncryptingHost(activeKeyId: 1, withBlindIndex: false, activeIndexVersion: 0))
+        {
+            using var scope = seedSp.CreateScope();
+            var ctx = scope.ServiceProvider.GetRequiredService<EncryptingCtx>();
+            await ctx.Database.EnsureCreatedAsync();
+            foreach (var id in ids)
+            {
+                ctx.Customers.Add(new Customer { Id = id, Name = "n", Email = $"{id}@x.com", EmailIndex = [] });
+            }
+
+            await ctx.SaveChangesAsync();
+        }
+
+        await using var sp = BuildMaintenanceHost(withBlindIndex: false);
+
+        ReencryptionReport report;
+        using (var scope = sp.CreateScope())
+        {
+            var runner = scope.ServiceProvider.GetRequiredService<IEncryptionMaintenance>();
+            var ctx = scope.ServiceProvider.GetRequiredService<RawCtx>();
+
+            // SavedChanges fires once per batch, straight after it is committed and before the next
+            // page is fetched. On the first one, delete the LOWEST-sorting row through a SECOND
+            // connection to the same database - an ordinary concurrent delete of the kind a
+            // retention job or a user-deletion request makes while a sweep is running. It lands
+            // below the offset the runner is about to skip past, so an offset-paged run loses the
+            // row that should have opened batch 2 (ids[batchSize]).
+            var deleted = false;
+            ctx.SavedChanges += (_, _) =>
+            {
+                if (deleted)
+                {
+                    return;
+                }
+
+                deleted = true;
+                using var other = new SqliteConnection(_conn.ConnectionString);
+                other.Open();
+                using var otherCtx = new RawCtx(new DbContextOptionsBuilder<RawCtx>().UseSqlite(other).Options);
+                otherCtx.Customers.Remove(new RawCustomer { Id = ids[0] });
+                otherCtx.SaveChanges();
+            };
+
+            report = await runner.RunAsync(ctx, EmailPlan(withBlindIndex: false).WithBatchSize(batchSize));
+        }
+
+        // The report must account for every row the pass actually visited - all nine, including the
+        // one deleted after batch 1 had already processed it. Offset paging reports eight.
+        report.Scanned.Should().Be(rowCount);
+        report.ReEncrypted.Should().Be(rowCount);
+        report.Skipped.Should().Be(0);
+        report.Errors.Should().Be(0);
+
+        // ... and the table must agree with it: not one surviving row is left on the revoked key.
+        // Under offset paging ids[batchSize] still carries key 1 while the report reads clean.
+        using (var scope = sp.CreateScope())
+        {
+            var raw = scope.ServiceProvider.GetRequiredService<RawCtx>();
+            var rows = await raw.Customers.OrderBy(c => c.Id).ToListAsync();
+            rows.Should().HaveCount(rowCount - 1);
+            rows.Where(c => c.Email![1] == 1).Should().BeEmpty();
+            rows.Should().OnlyContain(c => c.Email![0] == 0 && c.Email![1] == 2);
+        }
+
+        // Every surviving row decrypts under the active key: the sweep did the work, not just the
+        // counting.
+        await using var verifySp = BuildEncryptingHost(activeKeyId: 2, withBlindIndex: false, activeIndexVersion: 0);
+        using var verifyScope = verifySp.CreateScope();
+        var verifyCtx = verifyScope.ServiceProvider.GetRequiredService<EncryptingCtx>();
+        var emails = await verifyCtx.Customers.Select(c => c.Email).ToListAsync();
+        emails.Should().BeEquivalentTo(ids.Skip(1).Select(id => $"{id}@x.com"));
     }
 
     [Fact]
