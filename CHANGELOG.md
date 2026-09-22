@@ -88,7 +88,15 @@ All notable changes to OrionVault are recorded here. Format follows [Keep a Chan
   generic `CS0618` a project may already suppress wholesale.
 
   Reference `OrionVault.Testing` with `PrivateAssets="all"`.
+### Added
+
+#### `orion.vault.rotation.cycle_failures` counter
+
+`Counter<long>` incremented once per rotation cycle that threw before completing. Every other rotation signal is emitted at the END of a cycle, so a cycle that fails outright - unreachable database, a migration holding a lock, a revoked permission - moves none of them: the row counters never increment because no row is reached, and the duration histogram and last-cycle gauges sit past the throw. This counter is the only one that fires, so it is the signal to alert on for "the rotation host is up but rotation is not happening". Pair it with `orion.vault.rotation.last_cycle_at_unix_seconds` going stale.
+
 ### Fixed
+
+- **A rotation cycle that fails outright is no longer silent.** `EncryptionRotationHostedService.ExecuteAsync` caught cycle-level failures with a bare `catch { }`. If `IRotationSource.EnumerateAsync` threw every cycle - a bad connection string, a migration holding a lock, a permission change - no row was reached, so no per-row counter moved, and `RotationCycleDuration`, `SetLastCycleSnapshot` and `RotationRowErrors` all sit past the throw and never emitted either. The service stayed alive and healthy-looking indefinitely while rotation never ran once, with nothing in the logs and nothing on a dashboard to say so. The failure is now logged at `Error` with the exception (via `[LoggerMessage]`, like the row-failure and observer-fault paths beside it) and counted on the new `orion.vault.rotation.cycle_failures`. The loop still survives the failure and retries on the next tick.
 
 - **`EncryptionRotator.NeedsRotation` no longer declares a value that was never ciphertext to be already on the active key.** It gated only on 2 bytes and then judged on the first two alone, never on `CipherFormat.MinimumCiphertextLength` (30). So a column a plaintext-to-encrypted migration left behind as raw bytes - or any truncated blob - whose leading two bytes happened to equal the active key id was reported healthy: counted as **skipped**, written to no log, never encrypted. A sweep over a table still holding plaintext came back with zero errors. A value below the envelope minimum is now surfaced as an `OrionVaultDecryptionException` instead, because it is neither "skipped" nor safe to re-encrypt - encrypting it would bury an unencrypted value under a key and destroy the evidence that the column was never migrated. Both sweeps therefore count such a row as an **error** and leave its bytes untouched: `ReencryptionRunner` through its per-row guard, and `EncryptionRotationHostedService` through the same guard, which the `NeedsRotation` call now sits inside rather than in front of.
 

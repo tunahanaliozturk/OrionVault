@@ -31,6 +31,7 @@ public sealed class OrionVaultDiagnostics : OrionInstrumentation
     internal Counter<long> RotationRowsRotated { get; }
     internal Counter<long> RotationRowsSkipped { get; }
     internal Counter<long> RotationRowErrors { get; }
+    internal Counter<long> RotationCycleFailures { get; }
     internal Histogram<double> RotationCycleDuration { get; }
     internal Histogram<int> EncryptionPayloadSize { get; }
     internal Histogram<int> DecryptionPayloadSize { get; }
@@ -138,6 +139,13 @@ public sealed class OrionVaultDiagnostics : OrionInstrumentation
             "Rows already on the active key id (NeedsRotation returned false).");
         RotationRowErrors = Meter.CreateCounter<long>("orion.vault.rotation.row_errors", "{rows}",
             "Rows that threw during decrypt or re-encrypt (cycle continues; rows are not aborted).");
+        // Cycles that failed as a WHOLE - a bad connection string, a migration holding a lock, a
+        // revoked permission - so no row was ever reached. Every other rotation signal is emitted
+        // at the END of a cycle, which such a failure never gets to, so this is the only counter
+        // that moves: without it the background service looks alive and healthy while rotation has
+        // not happened once. Alert on any non-zero rate.
+        RotationCycleFailures = Meter.CreateCounter<long>("orion.vault.rotation.cycle_failures", "{cycles}",
+            "Rotation cycles that threw before completing (no rows processed; the next tick retries).");
         RotationCycleDuration = Meter.CreateHistogram<double>("orion.vault.rotation.cycle_duration_ms", "ms",
             "Wall-clock duration of one rotation cycle.");
         // v0.2.17 distribution of plaintext payload size in bytes per encrypt call.

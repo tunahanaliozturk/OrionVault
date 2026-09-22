@@ -29,14 +29,20 @@ public sealed partial class EncryptionRotationHostedService<THandle> : Backgroun
         Message = "IKeyRotationObserver faulted; rotation sweep continued")]
     private partial void LogObserverFaulted(Exception ex);
 
+    [LoggerMessage(EventId = 4, Level = LogLevel.Error,
+        Message = "EncryptionRotation cycle failed before completing; no rows were processed and the next tick will retry")]
+    private partial void LogCycleFailed(Exception ex);
+
     private readonly IServiceScopeFactory scopeFactory;
     private readonly EncryptionRotationOptions options;
     private readonly ILogger<EncryptionRotationHostedService<THandle>> logger;
+    private readonly OrionVaultDiagnostics? diagnostics;
 
     public EncryptionRotationHostedService(
         IServiceScopeFactory scopeFactory,
         IOptions<EncryptionRotationOptions> options,
-        ILogger<EncryptionRotationHostedService<THandle>>? logger = null)
+        ILogger<EncryptionRotationHostedService<THandle>>? logger = null,
+        OrionVaultDiagnostics? diagnostics = null)
     {
         ArgumentNullException.ThrowIfNull(scopeFactory);
         ArgumentNullException.ThrowIfNull(options);
@@ -44,6 +50,9 @@ public sealed partial class EncryptionRotationHostedService<THandle> : Backgroun
         this.options = options.Value;
         this.options.ValidateAndNormalise();
         this.logger = logger ?? NullLogger<EncryptionRotationHostedService<THandle>>.Instance;
+        // Held directly rather than resolved per cycle, because the cycle-failure path must be able
+        // to report even when creating the scope is the thing that failed.
+        this.diagnostics = diagnostics;
     }
 
     /// <summary>Run a single rotation pass. Exposed for tests + on-demand operator triggers.</summary>
@@ -166,12 +175,18 @@ public sealed partial class EncryptionRotationHostedService<THandle> : Backgroun
             {
                 return;
             }
-#pragma warning disable CA1031
-            catch
+#pragma warning disable CA1031 // the loop must survive any cycle-level fault; it is reported, not swallowed
+            catch (Exception ex)
 #pragma warning restore CA1031
             {
-                // Cycle-level failure: the next tick re-attempts. Per-row failures are
-                // already counted above and do not bubble.
+                // Cycle-level failure: a bad connection string, a migration holding a lock, a
+                // revoked permission. No row is ever reached, so no per-row counter moves - and
+                // every end-of-cycle signal (RotationCycleDuration, SetLastCycleSnapshot, the
+                // last-cycle gauges) sits past the throw and never fires either. Swallowing this
+                // silently is what leaves the service alive and healthy-looking while rotation has
+                // not run once. Report it on both channels before the next tick re-attempts.
+                LogCycleFailed(ex);
+                diagnostics?.RotationCycleFailures.Add(1);
             }
         } while (await timer.WaitForNextTickAsync(stoppingToken).ConfigureAwait(false));
     }

@@ -1,11 +1,14 @@
 namespace Moongazing.OrionVault.Tests;
 
+using System.Diagnostics.Metrics;
 using System.Runtime.CompilerServices;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Moongazing.OrionVault;
 using Moongazing.OrionVault.Abstractions;
 using Moongazing.OrionVault.DependencyInjection;
+using Moongazing.OrionVault.Diagnostics;
 using Moongazing.OrionVault.Rotation;
 using Xunit;
 
@@ -30,6 +33,43 @@ public sealed class EncryptionRotationHostedServiceTests
             Rows[handle] = ciphertext;
             Updates.Add((handle, ciphertext));
             return Task.CompletedTask;
+        }
+    }
+
+    // A source that fails the way a bad connection string / held migration lock / revoked
+    // permission does: the failure lands on the FIRST enumeration, so no row is ever reached.
+    private sealed class FailingRotationSource : IRotationSource<int>
+    {
+        public IAsyncEnumerable<RotationCandidate<int>> EnumerateAsync(CancellationToken cancellationToken)
+            => throw new InvalidOperationException("rotation source unreachable");
+
+        public Task UpdateAsync(int handle, byte[] ciphertext, CancellationToken cancellationToken)
+            => Task.CompletedTask;
+    }
+
+    // Minimal capturing logger: the point of the test is that the failure is REPORTED, so the test
+    // has to look at what was logged, not at a return value the caller never sees.
+    private sealed class CapturingLogger<T> : ILogger<T>
+    {
+        private readonly List<(LogLevel Level, string Message, Exception? Exception)> entries = [];
+
+        public IReadOnlyList<(LogLevel Level, string Message, Exception? Exception)> Entries
+        {
+            get { lock (entries) { return entries.ToList(); } }
+        }
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            ArgumentNullException.ThrowIfNull(formatter);
+            lock (entries)
+            {
+                entries.Add((logLevel, formatter(state, exception), exception));
+            }
         }
     }
 
@@ -177,6 +217,71 @@ public sealed class EncryptionRotationHostedServiceTests
         Assert.Equal(0, result.Rotated);
         Assert.Empty(source.Updates);
         await sp.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task A_cycle_that_fails_outright_is_logged_and_counted_instead_of_swallowed()
+    {
+        // Regression: ExecuteAsync used to catch cycle-level failures with a bare `catch { }`. When
+        // EnumerateAsync throws every cycle - bad connection string, a migration holding a lock, a
+        // permission change - no row is reached, so no per-row counter increments, and the cycle
+        // duration histogram, the last-cycle snapshot gauges and the row-error counter all sit PAST
+        // the throw and never emit either. The service stayed alive and perfectly healthy-looking
+        // while rotation never happened once. The class already used [LoggerMessage] for row
+        // failures and observer faults, so this one path was silent on every channel an operator
+        // has.
+        var services = new ServiceCollection();
+        services.AddOrionVault(o =>
+        {
+            o.UseStaticKeys(k => k.Add(1, KeyBase64));
+            o.ActiveKeyId = 1;
+        });
+        services.AddSingleton<IRotationSource<int>>(new FailingRotationSource());
+        await using var sp = services.BuildServiceProvider();
+
+        var diagnostics = sp.GetRequiredService<OrionVaultDiagnostics>();
+        var failures = 0L;
+        using var listener = new MeterListener();
+        listener.InstrumentPublished = (instrument, l) =>
+        {
+            // Filter on the diagnostics INSTANCE, not the meter name: a sibling test class can
+            // leave another OrionVaultDiagnostics publishing under the same name.
+            if (ReferenceEquals(instrument.Meter, diagnostics.Meter)
+                && instrument.Name == "orion.vault.rotation.cycle_failures")
+            {
+                l.EnableMeasurementEvents(instrument);
+            }
+        };
+        listener.SetMeasurementEventCallback<long>((_, val, _, _) => Interlocked.Add(ref failures, val));
+        listener.Start();
+
+        var logger = new CapturingLogger<EncryptionRotationHostedService<int>>();
+        using var sut = new EncryptionRotationHostedService<int>(
+            sp.GetRequiredService<IServiceScopeFactory>(),
+            Options.Create(new EncryptionRotationOptions { Interval = TimeSpan.FromMilliseconds(20) }),
+            logger,
+            diagnostics);
+
+        // The background loop runs its first cycle immediately; that one throws.
+        await sut.StartAsync(CancellationToken.None);
+        using (var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10)))
+        {
+            while (logger.Entries.Count == 0 && !timeout.IsCancellationRequested)
+            {
+                await Task.Delay(10, CancellationToken.None);
+            }
+        }
+
+        await sut.StopAsync(CancellationToken.None);
+
+        // Logged, at Error, carrying the underlying exception so the cause is diagnosable.
+        var failed = logger.Entries.Where(e => e.Exception is InvalidOperationException).ToList();
+        Assert.NotEmpty(failed);
+        Assert.All(failed, e => Assert.Equal(LogLevel.Error, e.Level));
+        Assert.Contains(failed, e => e.Message.Contains("cycle failed", StringComparison.OrdinalIgnoreCase));
+
+        // ... and counted, so a stalled rotation is visible on a dashboard and not only in logs.
+        Assert.True(Interlocked.Read(ref failures) > 0);
     }
 
     [Fact]
