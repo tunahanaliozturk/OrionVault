@@ -1,4 +1,6 @@
 using System.Collections.Frozen;
+using System.Net;
+using Azure;
 using Moongazing.OrionVault.Abstractions;
 using Moongazing.OrionVault.Exceptions;
 
@@ -17,6 +19,13 @@ namespace Moongazing.OrionVault.AzureKeyVault;
 /// background re-encryption service. Each entry's plaintext is held in memory once and
 /// reused; consumers MUST register the provider as singleton (the default
 /// <c>AddOrionVaultAzureKeyVault</c> extension enforces this).
+/// <para>
+/// The concrete provider is a fixed unwrap-once snapshot and deliberately does NOT implement
+/// <see cref="IUnwrappedKeySource"/> (mirroring the AWS / GCP / Vault providers). The refreshing
+/// envelope-key cache adapts a provider into an <see cref="IUnwrappedKeySource"/> via the static
+/// <see cref="CreateUnwrappedKeySource"/> seam, whose unwrap actually re-runs the vault unwrap on
+/// every refresh.
+/// </para>
 /// </remarks>
 public sealed class AzureKeyVaultKeyProvider : IKeyProvider
 {
@@ -56,6 +65,9 @@ public sealed class AzureKeyVaultKeyProvider : IKeyProvider
     public ReadOnlyMemory<byte>? TryGetKey(short keyId)
         => keys.TryGetValue(keyId, out var key) ? (ReadOnlyMemory<byte>?)key : null;
 
+    /// <inheritdoc />
+    public int KeyCount => keys.Count;
+
     /// <summary>
     /// Unwraps each configured base64 ciphertext blob via the supplied
     /// <see cref="IKeyVaultUnwrapClient"/> and returns a ready-to-use provider. Call once at
@@ -68,6 +80,23 @@ public sealed class AzureKeyVaultKeyProvider : IKeyProvider
     {
         ArgumentNullException.ThrowIfNull(unwrapClient);
         ArgumentNullException.ThrowIfNull(options);
+
+        var unwrapped = await UnwrapAllAsync(unwrapClient, options, cancellationToken).ConfigureAwait(false);
+        var map = unwrapped.ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
+        return new AzureKeyVaultKeyProvider(options.ActiveKeyId, map);
+    }
+
+    /// <summary>
+    /// Decodes and unwraps every configured ciphertext entry against the validated
+    /// <see cref="AzureKeyVaultKeyProviderOptions.KeyName"/>. Shared by <see cref="CreateAsync"/>
+    /// (unwrap-once) and the envelope-key cache refresh path so both go through identical
+    /// validation. Static so it is callable before an instance exists.
+    /// </summary>
+    internal static async Task<IReadOnlyDictionary<short, ReadOnlyMemory<byte>>> UnwrapAllAsync(
+        IKeyVaultUnwrapClient unwrapClient,
+        AzureKeyVaultKeyProviderOptions options,
+        CancellationToken cancellationToken)
+    {
         if (options.WrappedKeys.Count == 0)
         {
             throw new OrionVaultConfigurationException(
@@ -108,7 +137,80 @@ public sealed class AzureKeyVaultKeyProvider : IKeyProvider
         }).ToArray();
 
         var resolved = await Task.WhenAll(tasks).ConfigureAwait(false);
-        var dict = resolved.ToDictionary(x => x.id, x => x.plaintext);
-        return new AzureKeyVaultKeyProvider(options.ActiveKeyId, dict);
+        return resolved.ToDictionary(x => x.id, x => x.plaintext);
+    }
+
+    /// <summary>
+    /// Adapts a configured unwrap client + options into an <see cref="IUnwrappedKeySource"/> the
+    /// core <see cref="Moongazing.OrionVault.Caching.CachingKeyProvider"/> refreshes against. Each
+    /// refresh re-runs the vault unwrap (it is NOT a cached snapshot), so a KEK disabled / deleted
+    /// or an access policy removed mid-run is honoured. Used only on the opt-in caching path; the
+    /// unwrap-once path never touches this.
+    /// </summary>
+    public static IUnwrappedKeySource CreateUnwrappedKeySource(
+        IKeyVaultUnwrapClient unwrapClient,
+        AzureKeyVaultKeyProviderOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(unwrapClient);
+        ArgumentNullException.ThrowIfNull(options);
+        return new UnwrappedKeySource(unwrapClient, options);
+    }
+
+    /// <summary>
+    /// Maps an Azure Key Vault HTTP status onto the cache's transient-vs-revocation policy. A
+    /// revocation-class denial (403 access policy / RBAC withdrawn, 404 key deleted or not found,
+    /// 409 key disabled or soft-deleted) must fail closed; everything else (429 throttling, 5xx)
+    /// is transient. A non-Azure exception is left unclassified (transient).
+    /// </summary>
+    internal static KeyUnwrapException? TryClassify(Exception ex)
+    {
+        if (ex is not RequestFailedException failed)
+        {
+            return null;
+        }
+
+        var kind = (HttpStatusCode)failed.Status switch
+        {
+            HttpStatusCode.Forbidden => KeyUnwrapFailureKind.Revocation,
+            HttpStatusCode.NotFound => KeyUnwrapFailureKind.Revocation,
+            HttpStatusCode.Conflict => KeyUnwrapFailureKind.Revocation,
+            _ => KeyUnwrapFailureKind.Transient,
+        };
+
+        return new KeyUnwrapException(
+            kind,
+            $"Azure Key Vault unwrap failed with HTTP status {failed.Status} ({(HttpStatusCode)failed.Status}).",
+            failed);
+    }
+
+    private sealed class UnwrappedKeySource : IUnwrappedKeySource
+    {
+        private readonly IKeyVaultUnwrapClient unwrapClient;
+        private readonly AzureKeyVaultKeyProviderOptions options;
+
+        public UnwrappedKeySource(IKeyVaultUnwrapClient unwrapClient, AzureKeyVaultKeyProviderOptions options)
+        {
+            this.unwrapClient = unwrapClient;
+            this.options = options;
+        }
+
+        public short ActiveKeyId => options.ActiveKeyId;
+
+        public async Task<IReadOnlyDictionary<short, ReadOnlyMemory<byte>>> UnwrapAllAsync(
+            CancellationToken cancellationToken)
+        {
+            try
+            {
+                return await AzureKeyVaultKeyProvider
+                    .UnwrapAllAsync(unwrapClient, options, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex) when (TryClassify(ex) is { } classified)
+            {
+                // Translate the Azure SDK fault into the cache's transient / revocation
+                // vocabulary so the provider-agnostic cache can fail closed on a revoked key.
+                throw classified;
+            }
+        }
     }
 }

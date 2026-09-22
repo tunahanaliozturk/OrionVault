@@ -60,6 +60,11 @@ All notable changes to OrionVault are recorded here. Format follows [Keep a Chan
 
   **Breaking:** `ReencryptionPlan.For<TEntity>(orderBy)` is replaced by `ReencryptionPlan.For<TEntity, TKey>(keySelector)`, because a keyset cursor needs the key itself rather than an opaque ordering delegate. Change `ReencryptionPlan.For<RawCustomer>(q => q.OrderBy(c => c.Id))` to `ReencryptionPlan.For<RawCustomer, Guid>(c => c.Id)`. The key must be unique, unencrypted, and stable for the duration of the pass - the same requirement the ordering delegate already carried.
 - **A row the re-encryption pass counted as an error no longer has its half-rotated columns written to the table.** `ReencryptionRunner.ProcessRow` rewrites each encrypted column on the tracked entity as it goes, so when the second column failed to decrypt the first column's new ciphertext was still sitting on the entity when the batch `SaveChangesAsync` ran - and was persisted. The report said `errors=1, reEncrypted=0`, so an operator who rotated after an incident read "one unreadable row, nothing migrated" while that row was in fact half on the new key. Worse, it never converged: every later pass saw column 1 already active, failed on column 2 again, and reported the same misleading pair forever. The runner now detaches the entity when a row throws, so an errored row is a row the pass did not touch and the report matches the table.
+- **Corrected the provider documentation that claimed a parity which did not exist.** The AWS and
+  Azure package descriptions and READMEs said data keys are "cached in process memory for the
+  provider lifetime" with no mention of a refresh path, and their DI extension remarks documented
+  only the blocking startup unwrap. Both now describe the opt-in envelope-key cache alongside it,
+  matching the GCP wording. The AWS README documents the required `KeyId` and why it is required.
 
 ### Security
 
@@ -107,9 +112,6 @@ All notable changes to OrionVault are recorded here. Format follows [Keep a Chan
 > are on NuGet, and none of them changed. **No consumer action is required:** the new required
 > setting below cannot break anyone, because no released package exposes it. Projects consuming
 > `OrionVault.AwsKms` by project reference need the one-line change noted there.
-
-### Security
-
 - **AWS KMS decrypt now pins the CMK, and `AwsKmsKeyProviderOptions.KeyId` is required.**
   `AwsKmsKeyProvider` called `DecryptAsync` with only `CiphertextBlob` and never set
   `DecryptRequest.KeyId` — the only one of the four providers that did not pin its key (GCP passes
@@ -151,6 +153,27 @@ All notable changes to OrionVault are recorded here. Format follows [Keep a Chan
 `Counter<long>` incremented once per rotation cycle that did not COMPLETE - an unreachable database, a migration holding a lock, a revoked permission, a connection dropping between pages. Every other end-of-cycle signal (the duration histogram, the `last_cycle.*` gauges) is emitted after the sweep and such a cycle never gets there, so this counter is the only one that fires. It is the signal to alert on for "the rotation host is up but rotation is not finishing". Pair it with `orion.vault.rotation.last_cycle_at_unix_seconds` going stale.
 
 It does **not** mean zero work was done. A cycle can rotate rows and then fail, and `rotation.rows_rotated` / `rows_skipped` / `row_errors` include that partial work because they are incremented row by row - so an increment here next to rising row counters reads as "this cycle did some of its work and then stopped", not as a contradiction. A cycle that completed and only faulted while disposing its service scope is deliberately **not** counted here; it is logged on its own at `Warning` so it cannot be mistaken for an incomplete sweep.
+- **AWS KMS and Azure Key Vault can honour a revoked data key without a process restart.**
+  `GcpKmsKeyProvider` and `HashiCorpVaultKeyProvider` exposed `CreateUnwrappedKeySource` and a
+  `Cache` option; `AwsKmsKeyProvider` and `AzureKeyVaultKeyProvider` had neither, so their keys
+  were a `FrozenDictionary` populated once in `CreateAsync` and never revisited. When a data key
+  was suspected compromised and the operator disabled the KMS key or removed the vault access
+  policy — standard incident response — GCP and Vault failed closed at the next lookup past the
+  TTL, while AWS and Azure kept encrypting and decrypting with the revoked key for the whole
+  process lifetime, with no opt-in that changed it.
+
+  Both now expose the same seam as the other two: a static `CreateUnwrappedKeySource` whose unwrap
+  re-runs the KMS / vault call on every refresh, and an `EnvelopeKeyCacheOptions Cache` property
+  that `AddOrionVaultAwsKms` / `AddOrionVaultAzureKeyVault` wire into a `CachingKeyProvider`. Off
+  by default, so the unwrap-once behaviour is unchanged unless you opt in.
+
+  Each provider translates its SDK's faults into the existing revocation-versus-transient
+  classification, so a revocation fails closed even with `ServeStaleOnRefreshFailure` left on:
+
+  | Provider | Revocation (fails closed) | Transient (serve-stale eligible) |
+  | --- | --- | --- |
+  | AWS KMS | `KMSInvalidStateException`, `DisabledException`, `NotFoundException`, `InvalidCiphertextException`, `IncorrectKeyException`, `AccessDenied` / HTTP 403 | `LimitExceededException`, `KMSInternalException`, `DependencyTimeoutException`, 429, 5xx |
+  | Azure Key Vault | `RequestFailedException` 403, 404, 409 | 429, 5xx |
 
 ## [0.5.0] - 2026-07-28
 
@@ -324,6 +347,7 @@ Source-compatible. Existing `string`/`byte[]` encrypted properties behave exactl
 ## [0.3.1] - 2026-06-20
 
 ### Changed
+
 - The diagnostics version on the `OrionVaultDiagnostics` `Meter` and `ActivitySource` is now derived once from the assembly informational version instead of a hardcoded literal, so it always tracks the shipped package version (now `0.3.1`) and cannot drift out of sync on a release bump.
 
 ## [0.3.0] - 2026-06-19
@@ -350,11 +374,13 @@ A new opt-in subsystem lets callers run equality search over encrypted columns w
 ## [0.2.31] - 2026-06-17
 
 ### Changed
+
 - Set the NuGet package icon to the navy Moongazing mark and the README logo to the white Moongazing mark.
 
 ## [0.2.30] - 2026-06-17
 
 ### Changed
+
 - Updated the package icon and README logo to the new Moongazing mark.
 
 ## [0.2.29] - 2026-06-16
@@ -1146,3 +1172,4 @@ Replace `<PackageReference Include="Moongazing.OrionVault" Version="0.1.1" />` w
 [0.1.2]: https://github.com/tunahanaliozturk/OrionVault/releases/tag/v0.1.2
 [0.1.1]: https://github.com/tunahanaliozturk/OrionVault/releases/tag/v0.1.1
 [0.1.0]: https://github.com/tunahanaliozturk/OrionVault/releases/tag/v0.1.0
+

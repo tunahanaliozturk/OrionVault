@@ -4,6 +4,7 @@ using Amazon.KeyManagementService;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Moongazing.OrionVault.Abstractions;
+using Moongazing.OrionVault.Caching;
 using Moongazing.OrionVault.Exceptions;
 
 /// <summary>
@@ -28,6 +29,13 @@ public static class AwsKmsServiceCollectionExtensions
     /// round-trip per key id (usually only a couple). The decrypted plaintext keys live in
     /// process memory for the lifetime of the provider; OrionVault does NOT cache plaintext
     /// anywhere else.
+    /// </para>
+    /// <para>
+    /// When <see cref="EnvelopeKeyCacheOptions.Enabled"/> is set on
+    /// <see cref="AwsKmsKeyProviderOptions.Cache"/>, the provider is wrapped in a
+    /// <see cref="CachingKeyProvider"/> that re-fetches the wrapped keys after the configured TTL,
+    /// so a CMK disabled / scheduled for deletion / access-withdrawn mid-run is honoured without
+    /// a host restart.
     /// </para>
     /// </remarks>
     public static IServiceCollection AddOrionVaultAwsKms(
@@ -54,6 +62,17 @@ public static class AwsKmsServiceCollectionExtensions
                     "under. Every decrypt is pinned to it so a ciphertext blob substituted into " +
                     "WrappedKeys cannot be decrypted under some other CMK the host happens to have " +
                     "kms:Decrypt on.");
+            }
+
+            if (opts.Cache.Enabled)
+            {
+                opts.Cache.Validate();
+                var source = AwsKmsKeyProvider.CreateUnwrappedKeySource(kms, opts);
+                var caching = new CachingKeyProvider(source, opts.Cache, sp.GetService<TimeProvider>());
+                // Prime up front so misconfiguration / first KMS round-trip surfaces at startup,
+                // matching the unwrap-once path's fail-fast behaviour.
+                caching.Prime();
+                return caching;
             }
 
             return AwsKmsKeyProvider.CreateAsync(kms, opts).GetAwaiter().GetResult();

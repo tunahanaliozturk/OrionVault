@@ -1,5 +1,7 @@
 namespace Moongazing.OrionVault.AwsKms;
 
+using Moongazing.OrionVault.Caching;
+
 /// <summary>
 /// Configuration for <see cref="AwsKmsKeyProvider"/>. The provider decrypts a configured map
 /// of <c>(keyId, ciphertextBase64)</c> entries against the supplied AWS KMS client at startup
@@ -39,4 +41,12 @@ public sealed class AwsKmsKeyProviderOptions
     /// resolvable so existing rows continue to decrypt during a rotation rollout.
     /// </summary>
     public IDictionary<short, string> WrappedKeys { get; } = new Dictionary<short, string>();
+
+    /// <summary>
+    /// Opt-in envelope-key caching. Off by default: the provider unwraps once at startup and
+    /// holds the plaintext for the provider lifetime. Enable with a TTL to re-fetch the wrapped
+    /// keys periodically so a CMK disabled / scheduled for deletion / access-withdrawn mid-run
+    /// is picked up without a host restart.
+    /// </summary>
+    public EnvelopeKeyCacheOptions Cache { get; } = new();
 }
