@@ -106,9 +106,11 @@ public sealed class EncryptionRotationHostedServiceTests
     {
         private readonly List<(LogLevel Level, string Message, Exception? Exception)> entries = [];
 
-        public IReadOnlyList<(LogLevel Level, string Message, Exception? Exception)> Entries
+        // A snapshot copy each time, so a caller can enumerate it while the background loop is
+        // still appending.
+        public List<(LogLevel Level, string Message, Exception? Exception)> Entries
         {
-            get { lock (entries) { return entries.ToList(); } }
+            get { lock (entries) { return [.. entries]; } }
         }
 
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
@@ -124,9 +126,56 @@ public sealed class EncryptionRotationHostedServiceTests
                 entries.Add((logLevel, formatter(state, exception), exception));
             }
         }
+
+        /// <summary>
+        /// Waits for the SPECIFIC record a test is about, and returns that record.
+        /// <para>
+        /// Waiting on "any record exists" - or on a fixed delay - makes the assertion a property of
+        /// how fast the machine is: it passes on a quiet runner and fails when three framework legs
+        /// share one. Waiting on the condition removes that window instead of widening it. The
+        /// timeout is generous because it is a backstop, not a tuning knob, and it fails loudly
+        /// naming what WAS captured - falling through to a weaker assertion is how a timing window
+        /// turns into a flaky test rather than a failing one.
+        /// </para>
+        /// </summary>
+        public async Task<(LogLevel Level, string Message, Exception? Exception)> WaitForAsync(
+            Func<(LogLevel Level, string Message, Exception? Exception), bool> match,
+            string expectation)
+        {
+            ArgumentNullException.ThrowIfNull(match);
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            while (true)
+            {
+                foreach (var entry in Entries)
+                {
+                    if (match(entry))
+                    {
+                        return entry;
+                    }
+                }
+
+                if (timeout.IsCancellationRequested)
+                {
+                    var captured = Entries.Count == 0
+                        ? "(nothing was logged at all)"
+                        : string.Join(" | ", Entries.Select(e => $"[{e.Level}] {e.Message}"));
+                    Assert.Fail($"Timed out after 30s waiting for {expectation}. Captured: {captured}");
+                }
+
+                await Task.Delay(10, CancellationToken.None).ConfigureAwait(false);
+            }
+        }
     }
 
     private const string KeyBase64 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+
+    // An interval long enough that ExecuteAsync's do/while runs its body EXACTLY ONCE and then
+    // parks on the timer until StopAsync. These tests assert on the first cycle, and a second one
+    // would report something different but equally correct - the part-way source has had its rows
+    // rotated back into it by then, so cycle 2 legitimately says rotated=0 skipped=3. Bounding the
+    // cycle count by construction is what makes that assertion deterministic instead of a race
+    // against how quickly StopAsync lands.
+    private static readonly TimeSpan SingleCycleInterval = TimeSpan.FromMinutes(10);
 
     private static (ServiceProvider sp, InMemoryRotationSource source) BuildHost(short activeKeyId)
     {
@@ -311,37 +360,32 @@ public sealed class EncryptionRotationHostedServiceTests
         var logger = new CapturingLogger<EncryptionRotationHostedService<int>>();
         using var sut = new EncryptionRotationHostedService<int>(
             sp.GetRequiredService<IServiceScopeFactory>(),
-            Options.Create(new EncryptionRotationOptions { Interval = TimeSpan.FromMilliseconds(20) }),
+            Options.Create(new EncryptionRotationOptions { Interval = SingleCycleInterval }),
             logger,
             diagnostics);
 
-        // The background loop runs its first cycle immediately; that one throws.
+        // The background loop runs its one cycle immediately; that one throws. Wait for the record
+        // itself rather than for "something got logged", so the assertions below are not gated on a
+        // timing window the test does not control.
         await sut.StartAsync(CancellationToken.None);
-        using (var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10)))
-        {
-            while (logger.Entries.Count == 0 && !timeout.IsCancellationRequested)
-            {
-                await Task.Delay(10, CancellationToken.None);
-            }
-        }
-
+        var failed = await logger.WaitForAsync(
+            e => e.Exception is OrionVaultRotationCycleException { InnerException: InvalidOperationException },
+            "the cycle-failure record for a source that never yielded a row");
         await sut.StopAsync(CancellationToken.None);
 
         // Logged, at Error, still carrying the underlying cause so the failure is diagnosable: the
         // sweep wraps it to ferry the tallies out, and the original hangs off InnerException.
-        var failed = logger.Entries
-            .Where(e => e.Exception is OrionVaultRotationCycleException { InnerException: InvalidOperationException })
-            .ToList();
-        Assert.NotEmpty(failed);
-        Assert.All(failed, e => Assert.Equal(LogLevel.Error, e.Level));
-        Assert.Contains(failed, e => e.Message.Contains("did NOT complete", StringComparison.Ordinal));
+        Assert.Equal(LogLevel.Error, failed.Level);
+        Assert.Contains("did NOT complete", failed.Message, StringComparison.Ordinal);
 
         // This source fails before yielding a single row, so zero really is the truth here - the
         // counterpart to the part-way test, which must report the rows it did rotate.
-        Assert.All(failed, e => Assert.Contains("scanned=0 rotated=0", e.Message, StringComparison.Ordinal));
+        Assert.Contains("scanned=0 rotated=0", failed.Message, StringComparison.Ordinal);
 
         // ... and counted, so a stalled rotation is visible on a dashboard and not only in logs.
-        Assert.True(Interlocked.Read(ref failures) > 0);
+        // Exactly once: StopAsync has awaited the loop, and only one cycle could ever run.
+        Assert.Single(logger.Entries, e => e.Level == LogLevel.Error);
+        Assert.Equal(1, Interlocked.Read(ref failures));
     }
 
     [Fact]
@@ -425,32 +469,32 @@ public sealed class EncryptionRotationHostedServiceTests
         var logger = new CapturingLogger<EncryptionRotationHostedService<int>>();
         using var sut = new EncryptionRotationHostedService<int>(
             sp.GetRequiredService<IServiceScopeFactory>(),
-            Options.Create(new EncryptionRotationOptions { Interval = TimeSpan.FromMilliseconds(20) }),
+            Options.Create(new EncryptionRotationOptions { Interval = SingleCycleInterval }),
             logger,
             diagnostics);
 
+        // Wait for the cycle-failure record itself, not for "something got logged". The rows this
+        // source hands over get written straight back into it by UpdateAsync, so a SECOND cycle
+        // would find them already on the active key and report rotated=0 skipped=3 - correct for
+        // that cycle, and nothing to do with the one under test. SingleCycleInterval makes a second
+        // cycle impossible rather than merely unlikely.
         await sut.StartAsync(CancellationToken.None);
-        using (var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10)))
-        {
-            while (logger.Entries.Count == 0 && !timeout.IsCancellationRequested)
-            {
-                await Task.Delay(10, CancellationToken.None);
-            }
-        }
-
+        var failed = await logger.WaitForAsync(
+            e => e.Level == LogLevel.Error && e.Exception is OrionVaultRotationCycleException,
+            "the cycle-failure record for the one cycle this test runs");
         await sut.StopAsync(CancellationToken.None);
-
-        var failed = logger.Entries.Where(e => e.Level == LogLevel.Error).ToList();
-        Assert.NotEmpty(failed);
 
         // The rows it rotated are named, and named as PARTIAL - "rotated=3" alone would read as a
         // completed cycle to someone deciding whether to re-run.
-        Assert.All(failed, e => Assert.Contains("rotated=3", e.Message, StringComparison.Ordinal));
-        Assert.All(failed, e => Assert.DoesNotContain("rotated=0", e.Message, StringComparison.Ordinal));
-        Assert.All(failed, e => Assert.Contains("did NOT complete", e.Message, StringComparison.Ordinal));
-        Assert.All(failed, e => Assert.Contains("Partial counts", e.Message, StringComparison.Ordinal));
+        Assert.Contains("rotated=3", failed.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("rotated=0", failed.Message, StringComparison.Ordinal);
+        Assert.Contains("did NOT complete", failed.Message, StringComparison.Ordinal);
+        Assert.Contains("Partial counts", failed.Message, StringComparison.Ordinal);
 
-        Assert.True(Interlocked.Read(ref failures) > 0);
+        // Exactly one cycle ran, so exactly one failure is recorded and counted. StopAsync has
+        // awaited the loop, so the counter increment that follows the log has certainly landed.
+        Assert.Single(logger.Entries, e => e.Level == LogLevel.Error);
+        Assert.Equal(1, Interlocked.Read(ref failures));
     }
 
     [Fact]
