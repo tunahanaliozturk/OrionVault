@@ -111,6 +111,67 @@ public sealed class AwsKmsKeyProviderTests
     }
 
     [Fact]
+    public async Task CreateAsync_passes_the_exact_non_secret_encryption_context_to_every_decrypt()
+    {
+        var kms = new Mock<IAmazonKeyManagementService>();
+        kms.Setup(x => x.DecryptAsync(It.IsAny<DecryptRequest>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => new DecryptResponse { Plaintext = new MemoryStream(Key32(0x11)) });
+
+        var opts = new AwsKmsKeyProviderOptions { KeyId = Cmk, ActiveKeyId = 1 };
+        opts.WrappedKeys[1] = Convert.ToBase64String(Encoding.ASCII.GetBytes("ct1"));
+        opts.WrappedKeys[2] = Convert.ToBase64String(Encoding.ASCII.GetBytes("ct2"));
+        opts.EncryptionContext["purpose"] = "orionvault-data-key";
+        opts.EncryptionContext["environment"] = "production";
+
+        await AwsKmsKeyProvider.CreateAsync(kms.Object, opts);
+
+        kms.Verify(x => x.DecryptAsync(It.Is<DecryptRequest>(r =>
+            r.KeyId == Cmk && r.EncryptionContext.Count == 2 &&
+            r.EncryptionContext["purpose"] == "orionvault-data-key" &&
+            r.EncryptionContext["environment"] == "production"), It.IsAny<CancellationToken>()), Times.Exactly(2));
+    }
+
+    [Fact]
+    public async Task Empty_context_keeps_existing_context_free_blobs_compatible()
+    {
+        var kms = new Mock<IAmazonKeyManagementService>();
+        kms.Setup(x => x.DecryptAsync(It.IsAny<DecryptRequest>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => new DecryptResponse { Plaintext = new MemoryStream(Key32(0x11)) });
+        var opts = new AwsKmsKeyProviderOptions { KeyId = Cmk, ActiveKeyId = 1 };
+        opts.WrappedKeys[1] = Convert.ToBase64String(Encoding.ASCII.GetBytes("ct1"));
+
+        await AwsKmsKeyProvider.CreateAsync(kms.Object, opts);
+
+        kms.Verify(x => x.DecryptAsync(It.Is<DecryptRequest>(r =>
+            r.EncryptionContext == null || r.EncryptionContext.Count == 0), It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task Context_mismatch_fails_closed_at_startup()
+    {
+        var kms = new Mock<IAmazonKeyManagementService>();
+        kms.Setup(x => x.DecryptAsync(It.IsAny<DecryptRequest>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidCiphertextException("encryption context mismatch"));
+        var opts = new AwsKmsKeyProviderOptions { KeyId = Cmk, ActiveKeyId = 1 };
+        opts.WrappedKeys[1] = Convert.ToBase64String(Encoding.ASCII.GetBytes("ct1"));
+        opts.EncryptionContext["purpose"] = "wrong";
+
+        await Assert.ThrowsAsync<InvalidCiphertextException>(() => AwsKmsKeyProvider.CreateAsync(kms.Object, opts));
+    }
+
+    [Fact]
+    public async Task Invalid_context_is_rejected_before_any_kms_call()
+    {
+        var kms = new Mock<IAmazonKeyManagementService>();
+        var opts = new AwsKmsKeyProviderOptions { KeyId = Cmk, ActiveKeyId = 1 };
+        opts.WrappedKeys[1] = Convert.ToBase64String(Encoding.ASCII.GetBytes("ct1"));
+        opts.EncryptionContext["purpose"] = " ";
+
+        await Assert.ThrowsAsync<OrionVaultConfigurationException>(() => AwsKmsKeyProvider.CreateAsync(kms.Object, opts));
+        kms.Verify(x => x.DecryptAsync(It.IsAny<DecryptRequest>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
     public async Task CreateAsync_throws_when_KeyId_is_missing()
     {
         var kms = new Mock<IAmazonKeyManagementService>();
@@ -346,6 +407,27 @@ public sealed class AwsKmsKeyProviderTests
         kms.Verify(
             x => x.DecryptAsync(It.Is<DecryptRequest>(r => r.KeyId == Cmk), It.IsAny<CancellationToken>()),
             Times.Exactly(2));
+    }
+
+    [Fact]
+    public void Cache_refresh_reapplies_the_encryption_context()
+    {
+        var time = new ManualTimeProvider(DateTimeOffset.UnixEpoch);
+        var kms = new Mock<IAmazonKeyManagementService>();
+        kms.Setup(x => x.DecryptAsync(It.IsAny<DecryptRequest>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => new DecryptResponse { Plaintext = new MemoryStream(Key32(0x11)) });
+        var opts = new AwsKmsKeyProviderOptions { KeyId = Cmk, ActiveKeyId = 1 };
+        opts.WrappedKeys[1] = Convert.ToBase64String(Encoding.ASCII.GetBytes("ct1"));
+        opts.EncryptionContext["purpose"] = "orionvault-data-key";
+
+        var source = AwsKmsKeyProvider.CreateUnwrappedKeySource(kms.Object, opts);
+        using var cache = new CachingKeyProvider(source, CacheOpts(TimeSpan.FromMinutes(15)), time);
+        Assert.NotNull(cache.TryGetKey(1));
+        time.Advance(TimeSpan.FromMinutes(20));
+        Assert.NotNull(cache.TryGetKey(1));
+
+        kms.Verify(x => x.DecryptAsync(It.Is<DecryptRequest>(r =>
+            r.EncryptionContext["purpose"] == "orionvault-data-key"), It.IsAny<CancellationToken>()), Times.Exactly(2));
     }
 
     private static EnvelopeKeyCacheOptions CacheOpts(TimeSpan ttl, bool serveStale = true)

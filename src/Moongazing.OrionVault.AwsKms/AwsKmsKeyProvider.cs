@@ -118,6 +118,15 @@ public sealed class AwsKmsKeyProvider : IKeyProvider
         }
 
         var cmk = options.KeyId;
+        // Snapshot before starting concurrent KMS calls: a mutable options dictionary must not
+        // cause different wrapped keys in one provider build to receive different contexts.
+        var context = new Dictionary<string, string>(options.EncryptionContext, StringComparer.Ordinal);
+        if (context.Any(static entry => string.IsNullOrWhiteSpace(entry.Key) || string.IsNullOrWhiteSpace(entry.Value)))
+        {
+            throw new OrionVaultConfigurationException(
+                "AwsKmsKeyProviderOptions.EncryptionContext requires non-empty names and values.");
+        }
+
         var tasks = options.WrappedKeys.Select(async pair =>
         {
             var (id, ciphertextBase64) = pair;
@@ -145,9 +154,13 @@ public sealed class AwsKmsKeyProvider : IKeyProvider
             using var stream = new MemoryStream(ciphertext);
             // KeyId pins the decrypt to the configured CMK. Omitting it lets KMS resolve the key
             // from the blob's own metadata, which is what makes a substituted blob dangerous.
-            var response = await kms.DecryptAsync(
-                new DecryptRequest { CiphertextBlob = stream, KeyId = cmk },
-                cancellationToken).ConfigureAwait(false);
+            var request = new DecryptRequest { CiphertextBlob = stream, KeyId = cmk };
+            if (context.Count != 0)
+            {
+                request.EncryptionContext = context;
+            }
+
+            var response = await kms.DecryptAsync(request, cancellationToken).ConfigureAwait(false);
             return (id, plaintext: (ReadOnlyMemory<byte>)response.Plaintext.ToArray());
         }).ToArray();
 

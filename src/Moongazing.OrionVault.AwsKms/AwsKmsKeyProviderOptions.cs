@@ -43,6 +43,15 @@ public sealed class AwsKmsKeyProviderOptions
     public IDictionary<short, string> WrappedKeys { get; } = new Dictionary<short, string>();
 
     /// <summary>
+    /// Optional, non-secret AWS KMS encryption context for every wrapped data key. It must
+    /// exactly match the context supplied when each blob was encrypted; otherwise KMS refuses
+    /// the decrypt. Do not put tenant identifiers or other sensitive values here: AWS may record
+    /// the context in CloudTrail. Changing this value requires rewrapping all configured blobs.
+    /// The empty default preserves compatibility with existing blobs created without context.
+    /// </summary>
+    public IDictionary<string, string> EncryptionContext { get; } = new Dictionary<string, string>(StringComparer.Ordinal);
+
+    /// <summary>
     /// Opt-in envelope-key caching. Off by default: the provider unwraps once at startup and
     /// holds the plaintext for the provider lifetime. Enable with a TTL to re-fetch the wrapped
     /// keys periodically so a CMK disabled / scheduled for deletion / access-withdrawn mid-run
