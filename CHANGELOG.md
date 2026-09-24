@@ -6,6 +6,15 @@ All notable changes to OrionVault are recorded here. Format follows [Keep a Chan
 
 ## [Unreleased]
 
+### Security
+
+- **AWS KMS wrapped data keys can be bound to a non-secret encryption context.** The unpublished
+  `OrionVault.AwsKms` provider now passes `AwsKmsKeyProviderOptions.EncryptionContext` to every
+  KMS decrypt, including cache refreshes. A mismatched context fails closed at KMS. The default
+  remains empty for blobs wrapped without context. To opt in, rewrap every configured blob with
+  the same exact context before changing the options; do not put PII or secrets in it because AWS
+  may record the context in CloudTrail.
+
 > **Publish note.** `OrionVault.AwsKms`, `OrionVault.AzureKeyVault`, `OrionVault.GcpKms` and
 > `OrionVault.HashiCorpVault` are still held from publishing (`IsPackable=false`, as in 0.4.0 and
 > 0.5.0). Entries scoped to those four packages need no consumer action — including the new

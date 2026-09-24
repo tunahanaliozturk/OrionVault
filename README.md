@@ -92,6 +92,8 @@ flowchart LR
 
 The three published packages multi-target `net8.0` / `net9.0` / `net10.0`. The analyzer ships inside the core package; there is no separate analyzers nupkg to install. The cloud-KMS / HashiCorp provider projects listed above are implemented in the repository but are not yet published to NuGet.
 
+For the unpublished AWS KMS provider, `AwsKmsKeyProviderOptions.EncryptionContext` optionally binds wrapped data keys to a non-secret purpose/environment. Configure the **same exact** key-value context used when each blob was wrapped; a mismatch makes KMS refuse decryption at startup and during cache refresh. Existing blobs wrapped without context continue to work with the empty default. Enabling or changing context requires rewrapping all configured blobs first. Never put PII or secrets in context values: AWS can write them to CloudTrail.
+
 ## 30-second quick start
 
 Install the two runtime packages:
